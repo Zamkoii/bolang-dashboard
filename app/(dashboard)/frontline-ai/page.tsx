@@ -35,6 +35,7 @@ type AnalysisResult = {
   chatId: number;
   category: string;
   priority: "Tinggi" | "Sedang" | "Rendah";
+  priorityReason: string;
   summary: string;
   draft: string;
 };
@@ -156,71 +157,115 @@ function openChat(chat: Chat) {
   function analyzeSelectedChat() {
   if (!selectedChat) return;
 
-  const latestCustomerMessage = [...selectedChat.messages]
-    .reverse()
-    .find((message) => message.sender === "customer");
+  // Gabungkan semua pesan pelanggan dalam percakapan.
+  const customerMessages = selectedChat.messages
+    .filter((message) => message.sender === "customer")
+    .map((message) => message.text.trim())
+    .filter(Boolean);
 
-  if (!latestCustomerMessage) return;
+  if (customerMessages.length === 0) return;
 
-  const text = latestCustomerMessage.text.toLowerCase();
+  const fullConversation = customerMessages
+    .join(" ")
+    .toLowerCase();
+
+  // Analisis menggunakan kata kunci dari seluruh percakapan.
+  const hasComplaint =
+    /komplain|kecewa|rusak|terlambat|terlambat|cacat|kecewaan|tidak sesuai|mengecewakan|buruk|bermasalah|masalah/.test(
+      fullConversation
+    );
+
+  const hasPaymentIssue =
+    /bayar|pembayaran|refund|pengembalian dana|tagihan|transaksi|uang kembali/.test(
+      fullConversation
+    );
+
+  const hasShippingIssue =
+    /kirim|pengiriman|estimasi|sampai|pesanan|paket|kurir|resi|tracking|terlambat/.test(
+      fullConversation
+    );
+
+  const hasStockQuestion =
+    /stok|tersedia|persediaan|warna|ukuran|varian/.test(
+      fullConversation
+    );
 
   let category = "Pertanyaan umum";
   let priority: AnalysisResult["priority"] = "Rendah";
-  let summary = "Pelanggan membutuhkan informasi lebih lanjut.";
+  let priorityReason =
+    "Belum ditemukan indikasi masalah mendesak dari kata kunci percakapan.";
+  let summary =
+    "Pelanggan membutuhkan informasi lebih lanjut.";
   let draft =
     "Halo Kak, terima kasih sudah menghubungi kami. Bisa dijelaskan lebih lanjut mengenai kebutuhan Kakak agar kami dapat membantu dengan tepat?";
 
-  if (
-    text.includes("stok") ||
-    text.includes("tersedia") ||
-    text.includes("persediaan")
-  ) {
-    category = "Pertanyaan stok";
-    priority = "Sedang";
-    summary = "Pelanggan ingin mengetahui ketersediaan produk.";
-    draft =
-      "Halo Kak, terima kasih sudah menghubungi kami. Untuk ketersediaan produk tersebut, kami bantu cek terlebih dahulu ya. Mohon tunggu sebentar.";
-  } else if (
-    text.includes("kirim") ||
-    text.includes("pengiriman") ||
-    text.includes("estimasi") ||
-    text.includes("sampai") ||
-    text.includes("pesanan")
-  ) {
-    category = "Pengiriman pesanan";
-    priority = "Sedang";
-    summary = "Pelanggan menanyakan status atau estimasi pengiriman.";
-    draft =
-      "Halo Kak, terima kasih sudah menghubungi kami. Kami bantu cek status dan estimasi pengiriman pesanan Kakak terlebih dahulu ya.";
-  } else if (
-    text.includes("komplain") ||
-    text.includes("kecewa") ||
-    text.includes("rusak") ||
-    text.includes("terlambat") ||
-    text.includes("masalah")
-  ) {
+  // Keluhan diprioritaskan karena dapat membutuhkan penanganan khusus.
+  if (hasComplaint) {
     category = "Keluhan pelanggan";
     priority = "Tinggi";
-    summary = "Pelanggan menyampaikan masalah yang perlu ditindaklanjuti.";
+    priorityReason =
+      "Percakapan mengandung indikasi keluhan atau masalah yang perlu ditindaklanjuti.";
+
+    summary =
+      "Pelanggan menyampaikan keluhan atau kendala. Periksa seluruh riwayat percakapan untuk memahami masalahnya.";
+
     draft =
-      "Halo Kak, mohon maaf atas ketidaknyamanan yang dialami. Kami akan membantu menindaklanjuti masalah ini. Boleh ceritakan detail kendalanya agar kami dapat membantu dengan tepat?";
-  } else if (
-    text.includes("bayar") ||
-    text.includes("pembayaran") ||
-    text.includes("refund") ||
-    text.includes("pengembalian dana")
-  ) {
+      "Halo Kak, mohon maaf atas ketidaknyamanan yang dialami. Kami akan membantu menindaklanjuti kendala tersebut. Boleh ceritakan detail masalahnya agar kami dapat memeriksa dan memberikan solusi yang sesuai?";
+  } else if (hasPaymentIssue) {
     category = "Pembayaran";
     priority = "Tinggi";
-    summary = "Pelanggan membutuhkan bantuan terkait transaksi atau pembayaran.";
+    priorityReason =
+      "Percakapan berkaitan dengan transaksi, tagihan, atau pengembalian dana yang perlu diperiksa.";
+
+    summary =
+      "Pelanggan membutuhkan bantuan terkait pembayaran atau transaksi.";
+
     draft =
-      "Halo Kak, terima kasih sudah menghubungi kami. Kami bantu periksa kendala pembayarannya terlebih dahulu ya. Jika memungkinkan, mohon jelaskan detail transaksi yang dimaksud.";
+      "Halo Kak, terima kasih sudah menghubungi kami. Kami bantu periksa kendala transaksi tersebut terlebih dahulu ya. Mohon informasikan detail transaksi yang dimaksud agar dapat kami tindak lanjuti.";
+  } else if (hasShippingIssue) {
+    category = "Pengiriman pesanan";
+    priority = "Sedang";
+    priorityReason =
+      "Pelanggan membutuhkan informasi mengenai pesanan atau proses pengiriman.";
+
+    summary =
+      "Pelanggan menanyakan pesanan atau estimasi pengiriman.";
+
+    draft =
+      "Halo Kak, terima kasih sudah menghubungi kami. Kami bantu periksa status pesanan dan estimasi pengirimannya terlebih dahulu ya.";
+  } else if (hasStockQuestion) {
+    category = "Pertanyaan stok";
+    priority = "Sedang";
+    priorityReason =
+      "Pelanggan membutuhkan kepastian ketersediaan atau varian produk.";
+
+    summary =
+      "Pelanggan ingin mengetahui ketersediaan produk atau pilihan variannya.";
+
+    draft =
+      "Halo Kak, terima kasih sudah menghubungi kami. Kami bantu periksa ketersediaan produk dan varian yang Kakak inginkan terlebih dahulu ya.";
+  }
+
+  // Pesan terakhir pelanggan digunakan sebagai konteks tambahan draf.
+  const latestCustomerMessage =
+    customerMessages[customerMessages.length - 1];
+
+  // Tambahkan petunjuk pada draf jika pesan terakhir meminta informasi
+  // yang belum disebutkan secara spesifik.
+  if (
+    hasShippingIssue &&
+    !hasComplaint &&
+    /resi|tracking/.test(latestCustomerMessage.toLowerCase())
+  ) {
+    draft =
+      "Halo Kak, kami bantu periksa informasi pelacakan pesanan terlebih dahulu ya. Jika tersedia, mohon kirimkan nomor pesanan atau nomor resinya.";
   }
 
   setAnalysis({
     chatId: selectedChat.id,
     category,
     priority,
+    priorityReason,
     summary,
     draft,
   });
@@ -462,6 +507,15 @@ function openChat(chat: Chat) {
             {analysis.priority}
           </span>
         </div>
+
+        <div>
+  <p className="text-xs text-[#6B7280]">
+    Alasan prioritas
+  </p>
+  <p className="mt-1 text-[#374151]">
+    {analysis.priorityReason}
+  </p>
+</div>
 
         <div>
           <p className="text-xs text-[#6B7280]">Ringkasan</p>
