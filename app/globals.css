@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+/* Jika proyekmu memakai Tailwind v3, ganti baris @import di atas dengan:
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+*/
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: #f8fafc;
+  color: #111827;
+  -webkit-font-smoothing: antialiased;
+}
