@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { GitBranch, Headphones, Package, type LucideIcon } from "lucide-react";
+import { RecentSaleCard } from "@/components/recent-sale-card";
 
 type NavItem = { label: string; href: string; icon: LucideIcon };
 
@@ -68,6 +69,10 @@ export default function Sidebar() {
           );
         })}
       </nav>
+
+      <div className="mt-8 px-3">
+        <RecentSaleCard />
+      </div>
 
       {/* Kartu dekoratif di bawah sidebar */}
       <div
