@@ -1,24 +1,137 @@
-import { Phone, ShoppingCart, Sparkles } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import SupplyMindActions from "@/app/(dashboard)/supplymind/supplymind-actions";
+import { Sparkles } from "lucide-react";  
 import Breadcrumb from "@/components/Breadcrumb";
 
 const Y_AXIS = ["3.000", "2.500", "2.000", "1.500", "1.000", "500", "0"];
 const MAX = 3000;
-const PLOT_HEIGHT = 230; // px untuk nilai MAX
+const PLOT_HEIGHT = 230;
 
-const BARS = [
-  { label: "Baterai 1", value: 1700, text: "text-[#3B82F6]", gradient: "from-[#3B82F6] to-[#BFDBFE]" },
-  { label: "Baterai 2", value: 1800, text: "text-[#8B5CF6]", gradient: "from-[#8B5CF6] to-[#DDD6FE]" },
-  { label: "Baterai 3", value: 1900, text: "text-[#F97316]", gradient: "from-[#F97316] to-[#FFCBA8]" },
-  { label: "Baterai 4", value: 2800, text: "text-[#FBBF24]", gradient: "from-[#FBBF24] to-[#FEF3C7]" },
+// Data simulasi bahan baku sebagai cadangan.
+const DEMO_MATERIALS = [
+  {
+    label: "Baterai 1",
+    value: 1700,
+    safeStock: 1800,
+    text: "text-[#3B82F6]",
+    gradient: "from-[#3B82F6] to-[#BFDBFE]",
+  },
+  {
+    label: "Baterai 2",
+    value: 1800,
+    safeStock: 1900,
+    text: "text-[#8B5CF6]",
+    gradient: "from-[#8B5CF6] to-[#DDD6FE]",
+  },
+  {
+    label: "Baterai 3",
+    value: 1900,
+    safeStock: 1800,
+    text: "text-[#F97316]",
+    gradient: "from-[#F97316] to-[#FFCBA8]",
+  },
+  {
+    label: "Baterai 4",
+    value: 2800,
+    safeStock: 2500,
+    text: "text-[#FBBF24]",
+    gradient: "from-[#FBBF24] to-[#FEF3C7]",
+  },
 ];
 
-export default function SupplyMindPage() {
+const BAR_STYLES = [
+  {
+    text: "text-[#3B82F6]",
+    gradient: "from-[#3B82F6] to-[#BFDBFE]",
+  },
+  {
+    text: "text-[#8B5CF6]",
+    gradient: "from-[#8B5CF6] to-[#DDD6FE]",
+  },
+  {
+    text: "text-[#F97316]",
+    gradient: "from-[#F97316] to-[#FFCBA8]",
+  },
+  {
+    text: "text-[#FBBF24]",
+    gradient: "from-[#FBBF24] to-[#FEF3C7]",
+  },
+];
+
+export default async function SupplyMindPage() {
+  const { data, error } = await supabase
+    .from("raw_materials")
+    .select(
+      "id, name, sku, unit, current_stock, minimum_stock, unit_cost, supplier_name, updated_at"
+    )
+    .order("name");
+
+  // Jika data berhasil diambil, gunakan data Supabase.
+  // Jika tabel kosong atau query gagal, gunakan data simulasi.
+  const usingDemoData = !!error || !data || data.length === 0;
+console.log("SupplyMind query result:", {
+  error: error
+    ? {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
+      }
+    : null,
+  data,
+  dataLength: data?.length,
+});
+
+  const MATERIALS = usingDemoData
+    ? DEMO_MATERIALS
+    : data.map((item, index) => ({
+        label: item.name,
+        value: Number(item.current_stock) || 0,
+        safeStock: Number(item.minimum_stock) || 0,
+        ...BAR_STYLES[index % BAR_STYLES.length],
+      }));
+
+  // Analisis stok berdasarkan batas minimum.
+  const criticalMaterials = MATERIALS.filter(
+    (material) => material.value < material.safeStock
+  );
+
+  const totalStock = MATERIALS.reduce(
+    (total, material) => total + material.value,
+    0
+  );
+
+  const totalShortage = criticalMaterials.reduce(
+    (total, material) =>
+      total + material.safeStock - material.value,
+    0
+  );
+
+  const insightMessage =
+    criticalMaterials.length > 0
+      ? `⚠ Berdasarkan analisis stok, ${criticalMaterials
+          .map((material) => material.label)
+          .join(" dan ")} berada di bawah batas aman. Total kekurangan untuk mencapai batas minimum adalah ${totalShortage.toLocaleString(
+          "id-ID"
+        )} unit. Segera evaluasi pemesanan untuk menjaga kelancaran produksi.`
+      : "✓ Seluruh bahan baku berada pada atau di atas batas aman. Pantau perubahan stok dan kebutuhan produksi secara berkala.";
+
   return (
     <div className="px-10 pb-10 pt-[30px]">
       <div className="flex items-center justify-between">
         <Breadcrumb current="SupplyMind" />
         <span className="text-[12px] text-[#94A3B8]">
-          Terakhir diperbarui: 5 menit lalu
+          {usingDemoData
+            ? "Terakhir diperbarui: Data simulasi"
+            : `Terakhir diperbarui: ${new Date(
+                Math.max(
+                  ...data.map((item) =>
+                    item.updated_at
+                      ? new Date(item.updated_at).getTime()
+                      : 0
+                  )
+                )
+              ).toLocaleString("id-ID")}`}
         </span>
       </div>
 
@@ -39,15 +152,19 @@ export default function SupplyMindPage() {
 
         {/* Batang */}
         <div className="absolute left-[84px] right-[44px] top-[97px] flex">
-          {BARS.map((bar) => {
-            const height = Math.round((bar.value / MAX) * PLOT_HEIGHT);
+          {MATERIALS.map((bar) => {
+            const height = Math.min(
+              PLOT_HEIGHT,
+              Math.max(0, Math.round((bar.value / MAX) * PLOT_HEIGHT))
+            );
+
             return (
               <div
                 key={bar.label}
                 className="relative flex h-[230px] flex-1 flex-col items-center justify-end"
               >
                 <span className={`mb-2 text-[13px] font-bold ${bar.text}`}>
-                  {bar.value}
+                  {bar.value.toLocaleString("id-ID")}
                 </span>
                 <div
                   className={`w-[54px] rounded-t-[10px] bg-gradient-to-b ${bar.gradient}`}
@@ -72,25 +189,16 @@ export default function SupplyMindPage() {
             AI Insights - Rekomendasi MRP
           </h3>
           <p className="mt-1.5 text-[13.5px] leading-[22px] text-[#4B5563]">
-            <span aria-hidden>⚠</span> Berdasarkan analisis, stok Baterai 1 dan
-            Baterai 2 hampir habis dan berada di bawah batas aman. Harap segera
-            lakukan pemesanan (kebutuhan 1.500 unit) untuk jadwal produksi
-            minggu depan.
+            {insightMessage}
           </p>
         </div>
       </section>
 
       {/* Aksi */}
-      <div className="mt-6 flex flex-col items-start gap-3">
-        <button className="flex h-9 items-center gap-2 rounded-lg bg-[#F97316] px-[18px] text-[13px] font-semibold text-white transition hover:bg-[#EA6A0B]">
-          <ShoppingCart className="size-4" strokeWidth={2} />
-          Buat PO Otomatis
-        </button>
-        <button className="ml-3.5 flex items-center gap-1.5 text-[13px] font-medium text-[#F97316] transition hover:text-[#EA6A0B]">
-          <Phone className="size-[14px]" strokeWidth={2} />
-          Hubungi Vendor
-        </button>
-      </div>
+      <SupplyMindActions
+        criticalMaterials={criticalMaterials}
+        totalShortage={totalShortage}
+      />
     </div>
   );
 }
