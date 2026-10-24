@@ -336,8 +336,8 @@ export default function FrontlineAIPage() {
           title="Semua kategori"
           className={`relative flex size-[42px] items-center justify-center rounded-xl transition ${
             activeCategory === null
-              ? "bg-[#38BDF8] text-white shadow-[0_8px_16px_rgba(56,189,248,0.35)]"
-              : "bg-[#38BDF8]/80 text-white hover:bg-[#38BDF8]"
+              ? "bg-[#38BDF8] text-white shadow-[0_8px_16px_rgba(56,189,248,0.45)] ring-2 ring-[#38BDF8]/40"
+              : "bg-[#38BDF8]/20 text-[#0EA5E9] hover:bg-[#38BDF8]/35"
           }`}
         >
           <MessageSquare className="size-5" />
@@ -353,8 +353,8 @@ export default function FrontlineAIPage() {
           title={CHAT_CATEGORIES[0]}
           className={`flex size-[42px] items-center justify-center rounded-xl transition ${
             activeCategory === CHAT_CATEGORIES[0]
-              ? "bg-[#818CF8] text-white shadow-[0_8px_16px_rgba(129,140,248,0.35)]"
-              : "bg-[#818CF8]/80 text-white hover:bg-[#818CF8]"
+              ? "bg-[#818CF8] text-white shadow-[0_8px_16px_rgba(129,140,248,0.45)] ring-2 ring-[#818CF8]/40"
+              : "bg-[#818CF8]/20 text-[#6366F1] hover:bg-[#818CF8]/35"
           }`}
         >
           <Search className="size-5" />
@@ -370,8 +370,8 @@ export default function FrontlineAIPage() {
           title={CHAT_CATEGORIES[1]}
           className={`flex size-[42px] items-center justify-center rounded-xl transition ${
             activeCategory === CHAT_CATEGORIES[1]
-              ? "bg-[#FDA4AF] text-white shadow-[0_8px_16px_rgba(253,164,175,0.35)]"
-              : "bg-[#FDA4AF]/80 text-white hover:bg-[#FDA4AF]"
+              ? "bg-[#FDA4AF] text-white shadow-[0_8px_16px_rgba(253,164,175,0.5)] ring-2 ring-[#FDA4AF]/40"
+              : "bg-[#FDA4AF]/20 text-[#F43F5E] hover:bg-[#FDA4AF]/35"
           }`}
         >
           <ClipboardList className="size-5" />
@@ -387,8 +387,8 @@ export default function FrontlineAIPage() {
           title={CHAT_CATEGORIES[2]}
           className={`flex size-[42px] items-center justify-center rounded-xl transition ${
             activeCategory === CHAT_CATEGORIES[2]
-              ? "bg-[#FCA5A5] text-white shadow-[0_8px_16px_rgba(252,165,165,0.35)]"
-              : "bg-[#FCA5A5]/80 text-white hover:bg-[#FCA5A5]"
+              ? "bg-[#FCA5A5] text-white shadow-[0_8px_16px_rgba(252,165,165,0.5)] ring-2 ring-[#FCA5A5]/40"
+              : "bg-[#FCA5A5]/20 text-[#EF4444] hover:bg-[#FCA5A5]/35"
           }`}
         >
           <AlertTriangle className="size-5" />
