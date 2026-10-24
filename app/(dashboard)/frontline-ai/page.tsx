@@ -1,18 +1,20 @@
-
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  MessageSquare,
-  PencilLine,
-  ShieldAlert,
-  User,
-  Send,
+  AlertTriangle,
   Bot,
-  CheckCheck,
+  Check,
+  CheckCircle2,
+  Clock,
+  MessageSquare,
+  Send,
+  ShieldAlert,
   Sparkles,
+  User,
 } from "lucide-react";
 import Breadcrumb from "@/components/Breadcrumb";
+import { supabase } from "@/lib/supabase";
 
 type ChatMessage = {
   id: number;
@@ -23,7 +25,9 @@ type ChatMessage = {
 
 type Chat = {
   id: number;
+  sessionId: string;
   name: string;
+  category: string;
   message: string;
   time: string;
   unread: number;
@@ -31,19 +35,30 @@ type Chat = {
   messages: ChatMessage[];
 };
 
-type AnalysisResult = {
-  chatId: number;
+type Analysis = {
   category: string;
   priority: "Tinggi" | "Sedang" | "Rendah";
-  priorityReason: string;
+  confidence: string;
+  sentiment: string;
   summary: string;
   draft: string;
+};
+
+type CustomerChatRow = {
+  id: number;
+  session_id: string;
+  customer_name: string | null;
+  category: string | null;
+  question: string | null;
+  created_at: string;
 };
 
 const INITIAL_CHATS: Chat[] = [
   {
     id: 1,
+    sessionId: "demo-1",
     name: "Budi",
+    category: "Informasi Produk",
     message: "Apakah stok produk A warna pink masih ada?",
     time: "3m ago",
     unread: 2,
@@ -52,12 +67,6 @@ const INITIAL_CHATS: Chat[] = [
       {
         id: 1,
         sender: "customer",
-        text: "Halo, saya ingin bertanya tentang produk A.",
-        time: "10:20",
-      },
-      {
-        id: 2,
-        sender: "customer",
         text: "Apakah stok produk A warna pink masih ada?",
         time: "10:22",
       },
@@ -65,7 +74,9 @@ const INITIAL_CHATS: Chat[] = [
   },
   {
     id: 2,
+    sessionId: "demo-2",
     name: "Karina",
+    category: "Logistik & Pengiriman",
     message: "Kira-kira estimasi sampai barangnya ke Bogor berapa hari ya?",
     time: "15m ago",
     unread: 0,
@@ -74,214 +85,181 @@ const INITIAL_CHATS: Chat[] = [
       {
         id: 1,
         sender: "customer",
-        text: "Halo, saya mau menanyakan pengiriman pesanan.",
-        time: "10:05",
-      },
-      {
-        id: 2,
-        sender: "customer",
         text: "Kira-kira estimasi sampai barangnya ke Bogor berapa hari ya?",
         time: "10:08",
-      },
-    ],
-  },
-  {
-    id: 3,
-    name: "Budi",
-    message: "Apakah stok produk A warna pink masih ada?",
-    time: "1h ago",
-    unread: 0,
-    tone: "indigo",
-    messages: [
-      {
-        id: 1,
-        sender: "customer",
-        text: "Apakah stok produk A warna pink masih ada?",
-        time: "09:15",
-      },
-    ],
-  },
-  {
-    id: 4,
-    name: "Karina",
-    message: "Kira-kira estimasi sampai barangnya ke Bogor berapa hari ya?",
-    time: "2h ago",
-    unread: 0,
-    tone: "fuchsia",
-    messages: [
-      {
-        id: 1,
-        sender: "customer",
-        text: "Kira-kira estimasi sampai barangnya ke Bogor berapa hari ya?",
-        time: "08:10",
       },
     ],
   },
 ];
 
 const AVATAR_TONE = {
-  indigo: "border-[#C7D2FE] bg-[#EEF2FF] text-[#4F46E5]",
-  fuchsia: "border-[#F5D0FE] bg-[#FDF4FF] text-[#C026D3]",
-} as const;
+  indigo: {
+    bg: "bg-[#EEF2FF]",
+    text: "text-[#6366F1]",
+  },
+  fuchsia: {
+    bg: "bg-[#FDF4FF]",
+    text: "text-[#D946EF]",
+  },
+};
+
+const CHAT_CATEGORIES = [
+  "Informasi Produk & Estimasi",
+  "Ubah Data atau Kendala Pesanan",
+  "Laporan Masalah Pengiriman & Barang Rusak",
+] as const;
+
+type ChatCategory = (typeof CHAT_CATEGORIES)[number];
+
+function formatRelativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "baru saja";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
 
 export default function FrontlineAIPage() {
-  const [chats, setChats] = useState(INITIAL_CHATS);
+  const [chats, setChats] = useState<Chat[]>(INITIAL_CHATS);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [reply, setReply] = useState("");
-  const [filter, setFilter] = useState<"all" | "unread">("all");
-  const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [filter, setFilter] = useState<"all" | "unread" | "resolved">("all");
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
 
-  const selectedChat = chats.find((chat) => chat.id === selectedId);
+  useEffect(() => {
+    let isMounted = true;
 
-  const unreadTotal = chats.reduce(
-    (total, chat) => total + chat.unread,
-    0
-  );
+    async function loadConversations() {
+      try {
+        const { data, error } = await supabase
+          .from("customer_chats")
+          .select("id, session_id, customer_name, category, question, created_at")
+          .order("created_at", { ascending: false });
+
+        if (!isMounted || error || !data || data.length === 0) return;
+
+        const liveChats: Chat[] = data.map((row: CustomerChatRow, index: number) => {
+          const timeFormatted = new Date(row.created_at).toLocaleTimeString("id-ID", {
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+
+          return {
+            id: row.id,
+            sessionId: row.session_id,
+            name: row.customer_name || `Pelanggan #${row.id}`,
+            category: row.category || "Umum",
+            message: row.question || "",
+            time: formatRelativeTime(row.created_at),
+            unread: 0,
+            tone: index % 2 === 0 ? "indigo" : "fuchsia",
+            messages: [
+              {
+                id: 1,
+                sender: "customer",
+                text: row.question || "",
+                time: timeFormatted,
+              },
+            ],
+          };
+        });
+
+        setChats(liveChats);
+      } catch {
+        // Fallback ke INITIAL_CHATS jika ada kendala
+      }
+    }
+
+    loadConversations();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const selectedChat = chats.find((chat) => chat.id === selectedId) ?? null;
+
+  const unreadTotal = chats.reduce((total, chat) => total + chat.unread, 0);
 
   const visibleChats =
-    filter === "unread"
-      ? chats.filter((chat) => chat.unread > 0)
-      : chats;
+    filter === "unread" ? chats.filter((chat) => chat.unread > 0) : chats;
 
-function openChat(chat: Chat) {
-  setSelectedId(chat.id);
-  setAnalysis(null);
+  function openChat(chat: Chat) {
+    setSelectedId(chat.id);
+    setAnalysis(null);
 
-  setChats((previous) =>
-    previous.map((item) =>
-      item.id === chat.id ? { ...item, unread: 0 } : item
-    )
-  );
-}
+    setChats((previous) =>
+      previous.map((item) =>
+        item.id === chat.id ? { ...item, unread: 0 } : item
+      )
+    );
+  }
 
   function analyzeSelectedChat() {
-  if (!selectedChat) return;
+    if (!selectedChat) return;
 
-  // Gabungkan semua pesan pelanggan dalam percakapan.
-  const customerMessages = selectedChat.messages
-    .filter((message) => message.sender === "customer")
-    .map((message) => message.text.trim())
-    .filter(Boolean);
+    const customerMessages = selectedChat.messages
+      .filter((message) => message.sender === "customer")
+      .map((message) => message.text.trim())
+      .filter(Boolean);
 
-  if (customerMessages.length === 0) return;
+    if (customerMessages.length === 0) {
+      setAnalysis({
+        category: "Informasi Umum",
+        priority: "Rendah",
+        confidence: "90%",
+        sentiment: "Netral",
+        summary: "Percakapan baru dibuat atau belum ada pertanyaan spesifik dari pelanggan.",
+        draft: "Halo, ada yang bisa kami bantu terkait pesanan atau produk Bolang?",
+      });
+      return;
+    }
 
-  const fullConversation = customerMessages
-    .join(" ")
-    .toLowerCase();
+    const latestCustomerMessage =
+      customerMessages[customerMessages.length - 1]?.toLowerCase() ?? "";
 
-  // Analisis menggunakan kata kunci dari seluruh percakapan.
-  const hasComplaint =
-    /komplain|kecewa|rusak|terlambat|terlambat|cacat|kecewaan|tidak sesuai|mengecewakan|buruk|bermasalah|masalah/.test(
-      fullConversation
-    );
+    let category = selectedChat.category || "Informasi Produk";
+    let priority: "Tinggi" | "Sedang" | "Rendah" = "Rendah";
+    let sentiment = "Positif / Netral";
+    let summary = "Pelanggan menanyakan informasi terkait produk atau pemesanan.";
+    let draft = "Halo! Terima kasih sudah menghubungi kami. Pesanan Anda siap kami bantu proses.";
 
-  const hasPaymentIssue =
-    /bayar|pembayaran|refund|pengembalian dana|tagihan|transaksi|uang kembali/.test(
-      fullConversation
-    );
+    if (/rusak|bocor|retak|cembung|panas|kendala/.test(latestCustomerMessage)) {
+      category = "Masalah Produk / Klaim Garansi";
+      priority = "Tinggi";
+      sentiment = "Negatif / Mendesak";
+      summary = "Pelanggan melaporkan kendala fisik atau kerusakan pada unit baterai.";
+      draft =
+        "Halo, mohon maaf atas kendala yang dialami. Kami siap membantu proses klaim garansi. Boleh kirimkan kode pesanan Anda?";
+    } else if (/sampai|kirim|resi|ongkir|bogor|kapan/.test(latestCustomerMessage)) {
+      category = "Logistik & Pengiriman";
+      priority = "Sedang";
+      sentiment = "Menunggu Informasi";
+      summary = "Pelanggan menanyakan perkiraan waktu tiba dan proses pengiriman barang.";
+      draft =
+        "Halo! Estimasi pengiriman ke lokasi Anda adalah 2-3 hari kerja. Pesanan akan segera kami proses.";
+    }
 
-  const hasShippingIssue =
-    /kirim|pengiriman|estimasi|sampai|pesanan|paket|kurir|resi|tracking|terlambat/.test(
-      fullConversation
-    );
-
-  const hasStockQuestion =
-    /stok|tersedia|persediaan|warna|ukuran|varian/.test(
-      fullConversation
-    );
-
-  let category = "Pertanyaan umum";
-  let priority: AnalysisResult["priority"] = "Rendah";
-  let priorityReason =
-    "Belum ditemukan indikasi masalah mendesak dari kata kunci percakapan.";
-  let summary =
-    "Pelanggan membutuhkan informasi lebih lanjut.";
-  let draft =
-    "Halo Kak, terima kasih sudah menghubungi kami. Bisa dijelaskan lebih lanjut mengenai kebutuhan Kakak agar kami dapat membantu dengan tepat?";
-
-  // Keluhan diprioritaskan karena dapat membutuhkan penanganan khusus.
-  if (hasComplaint) {
-    category = "Keluhan pelanggan";
-    priority = "Tinggi";
-    priorityReason =
-      "Percakapan mengandung indikasi keluhan atau masalah yang perlu ditindaklanjuti.";
-
-    summary =
-      "Pelanggan menyampaikan keluhan atau kendala. Periksa seluruh riwayat percakapan untuk memahami masalahnya.";
-
-    draft =
-      "Halo Kak, mohon maaf atas ketidaknyamanan yang dialami. Kami akan membantu menindaklanjuti kendala tersebut. Boleh ceritakan detail masalahnya agar kami dapat memeriksa dan memberikan solusi yang sesuai?";
-  } else if (hasPaymentIssue) {
-    category = "Pembayaran";
-    priority = "Tinggi";
-    priorityReason =
-      "Percakapan berkaitan dengan transaksi, tagihan, atau pengembalian dana yang perlu diperiksa.";
-
-    summary =
-      "Pelanggan membutuhkan bantuan terkait pembayaran atau transaksi.";
-
-    draft =
-      "Halo Kak, terima kasih sudah menghubungi kami. Kami bantu periksa kendala transaksi tersebut terlebih dahulu ya. Mohon informasikan detail transaksi yang dimaksud agar dapat kami tindak lanjuti.";
-  } else if (hasShippingIssue) {
-    category = "Pengiriman pesanan";
-    priority = "Sedang";
-    priorityReason =
-      "Pelanggan membutuhkan informasi mengenai pesanan atau proses pengiriman.";
-
-    summary =
-      "Pelanggan menanyakan pesanan atau estimasi pengiriman.";
-
-    draft =
-      "Halo Kak, terima kasih sudah menghubungi kami. Kami bantu periksa status pesanan dan estimasi pengirimannya terlebih dahulu ya.";
-  } else if (hasStockQuestion) {
-    category = "Pertanyaan stok";
-    priority = "Sedang";
-    priorityReason =
-      "Pelanggan membutuhkan kepastian ketersediaan atau varian produk.";
-
-    summary =
-      "Pelanggan ingin mengetahui ketersediaan produk atau pilihan variannya.";
-
-    draft =
-      "Halo Kak, terima kasih sudah menghubungi kami. Kami bantu periksa ketersediaan produk dan varian yang Kakak inginkan terlebih dahulu ya.";
+    setAnalysis({
+      category,
+      priority,
+      confidence: "96%",
+      sentiment,
+      summary,
+      draft,
+    });
   }
 
-  // Pesan terakhir pelanggan digunakan sebagai konteks tambahan draf.
-  const latestCustomerMessage =
-    customerMessages[customerMessages.length - 1];
-
-  // Tambahkan petunjuk pada draf jika pesan terakhir meminta informasi
-  // yang belum disebutkan secara spesifik.
-  if (
-    hasShippingIssue &&
-    !hasComplaint &&
-    /resi|tracking/.test(latestCustomerMessage.toLowerCase())
-  ) {
-    draft =
-      "Halo Kak, kami bantu periksa informasi pelacakan pesanan terlebih dahulu ya. Jika tersedia, mohon kirimkan nomor pesanan atau nomor resinya.";
-  }
-
-  setAnalysis({
-    chatId: selectedChat.id,
-    category,
-    priority,
-    priorityReason,
-    summary,
-    draft,
-  });
-}
-
-  function sendReply(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    const text = reply.trim();
-
-    if (!text || !selectedChat) return;
+  function sendReply() {
+    const cleanReply = reply.trim();
+    if (!cleanReply || !selectedChat) return;
 
     const newMessage: ChatMessage = {
-      id: Date.now(),
+      id: selectedChat.messages.length + 1,
       sender: "agent",
-      text,
+      text: cleanReply,
       time: new Date().toLocaleTimeString("id-ID", {
         hour: "2-digit",
         minute: "2-digit",
@@ -293,8 +271,7 @@ function openChat(chat: Chat) {
         chat.id === selectedChat.id
           ? {
               ...chat,
-              message: text,
-              time: "Baru saja",
+              message: cleanReply,
               messages: [...chat.messages, newMessage],
             }
           : chat
@@ -305,287 +282,246 @@ function openChat(chat: Chat) {
   }
 
   return (
-    <div className="px-4 pb-8 pt-8 md:px-8">
+    <div className="px-10 pb-10 pt-[30px]">
       <Breadcrumb current="Frontline AI" />
 
-      <div className="mt-6 flex flex-wrap gap-3">
+      {/* Filter Kategori Header */}
+      <div className="mt-4 flex items-center gap-4">
         <button
+          type="button"
           onClick={() => setFilter("all")}
-          aria-label="Semua pesan"
-          className={`relative flex h-11 w-16 items-center justify-center rounded-xl text-white transition hover:brightness-95 ${
-            filter === "all" ? "bg-[#38BDF8]" : "bg-[#7DD3FC]"
+          className={`relative flex size-[42px] items-center justify-center rounded-xl transition ${
+            filter === "all"
+              ? "bg-[#38BDF8] text-white shadow-[0_8px_16px_rgba(56,189,248,0.35)]"
+              : "bg-white text-[#94A3B8] hover:bg-slate-50"
           }`}
         >
-          <MessageSquare className="size-5" strokeWidth={1.75} />
+          <MessageSquare className="size-5" />
           {unreadTotal > 0 && (
-            <span className="absolute -left-[5px] -top-[7px] rounded-full bg-[#EF4444] px-[5px] py-px text-[10px] font-bold leading-[14px] text-white">
-              {unreadTotal > 99 ? "99+" : unreadTotal}
+            <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#EF4444] px-1 text-[10px] font-bold text-white">
+              {unreadTotal > 50 ? "50+" : unreadTotal}
             </span>
           )}
         </button>
 
         <button
+          type="button"
           onClick={() => setFilter("unread")}
-          aria-label="Pesan belum dibaca"
-          className={`flex h-11 w-16 items-center justify-center rounded-xl text-white transition hover:brightness-95 ${
-            filter === "unread" ? "bg-[#6366F1]" : "bg-[#818CF8]"
+          className={`flex size-[42px] items-center justify-center rounded-xl transition ${
+            filter === "unread"
+              ? "bg-[#818CF8] text-white shadow-[0_8px_16px_rgba(129,140,248,0.35)]"
+              : "bg-[#818CF8]/80 text-white hover:bg-[#818CF8]"
           }`}
         >
-          <PencilLine className="size-5" strokeWidth={1.75} />
+          <Sparkles className="size-5" />
         </button>
 
         <button
-          onClick={() =>
-            window.alert(
-              "Simulasi: daftar percakapan yang perlu perhatian akan tersedia di tahap berikutnya."
-            )
-          }
-          aria-label="Peringatan"
-          className="flex h-11 w-16 items-center justify-center rounded-xl bg-[#FCA5A5] text-white transition hover:brightness-95"
+          type="button"
+          onClick={() => setFilter("resolved")}
+          className={`flex size-[42px] items-center justify-center rounded-xl transition ${
+            filter === "resolved"
+              ? "bg-[#FDA4AF] text-white shadow-[0_8px_16px_rgba(253,164,175,0.35)]"
+              : "bg-[#FDA4AF]/80 text-white hover:bg-[#FDA4AF]"
+          }`}
         >
-          <ShieldAlert className="size-5" strokeWidth={1.75} />
+          <ShieldAlert className="size-5" />
         </button>
       </div>
 
-      <div className="mt-5 grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(300px,0.85fr)_minmax(0,1.4fr)]">
-        {/* Daftar chat */}
-        <section className="min-w-0">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-base font-semibold text-[#111827]">
+      {/* Konten Utama: 2 Kolom */}
+      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[400px_1fr]">
+        {/* Kolom Kiri: Daftar Percakapan */}
+        <div>
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-[16px] font-bold text-[#1E293B]">
               Percakapan pelanggan
             </h2>
-            <span className="text-xs text-[#6B7280]">
+            <span className="text-[12px] text-[#94A3B8]">
               {visibleChats.length} percakapan
             </span>
           </div>
 
-          <ul className="flex flex-col gap-[10px]">
-            {visibleChats.map((chat) => (
-              <li key={chat.id}>
-                <button
+          <div className="space-y-3">
+            {visibleChats.map((chat) => {
+              const tone = AVATAR_TONE[chat.tone];
+              const isSelected = chat.id === selectedId;
+
+              return (
+                <div
+                  key={chat.id}
                   onClick={() => openChat(chat)}
-                  className={`flex min-h-[86px] w-full items-center gap-4 rounded-xl border px-4 py-4 text-left shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition ${
-                    selectedId === chat.id
-                      ? "border-[#818CF8] bg-[#F5F7FF]"
-                      : "border-[#E5E7EB] bg-white hover:bg-gray-50"
+                  className={`flex cursor-pointer items-start gap-3.5 rounded-2xl border p-4 transition ${
+                    isSelected
+                      ? "border-[#38BDF8] bg-white shadow-[0_4px_12px_rgba(56,189,248,0.15)]"
+                      : "border-[#E2E8F0] bg-white hover:border-[#CBD5E1]"
                   }`}
                 >
-                  <span
-                    className={`flex size-[46px] shrink-0 items-center justify-center rounded-full border ${AVATAR_TONE[chat.tone]}`}
-                  >
-                    <User className="size-5" strokeWidth={1.75} />
-                  </span>
-
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-2">
-                      <span className="text-[15px] font-semibold text-[#111827]">
-                        {chat.name}
-                      </span>
-                      {chat.unread > 0 && (
-                        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[#2563EB] text-[12px] font-semibold text-white">
-                          {chat.unread}
-                        </span>
-                      )}
-                    </span>
-                    <span className="mt-1 block truncate text-[13px] text-[#4B5563]">
-                      {chat.message}
-                    </span>
-                    <span className="mt-1 block text-[11px] text-[#9CA3AF]">
-                      {chat.time}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-
-          {visibleChats.length === 0 && (
-            <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
-              Tidak ada pesan belum dibaca.
-            </div>
-          )}
-        </section>
-
-        {/* Detail percakapan */}
-        <section className="min-w-0 overflow-hidden rounded-xl border border-[#E5E7EB] bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-          {selectedChat ? (
-            <>
-              <div className="flex items-center gap-3 border-b border-[#E5E7EB] px-5 py-4">
-                <span
-                  className={`flex size-10 items-center justify-center rounded-full border ${AVATAR_TONE[selectedChat.tone]}`}
-                >
-                  <User className="size-5" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <h3 className="font-semibold text-[#111827]">
-                    {selectedChat.name}
-                  </h3>
-                  <p className="text-xs text-[#6B7280]">
-                    Percakapan pelanggan
-                  </p>
-                </div>
-                <span className="flex items-center gap-1 rounded-full bg-[#EEF2FF] px-2 py-1 text-xs font-medium text-[#4F46E5]">
-                  <Bot className="size-3.5" />
-                  AI siap membantu
-                </span>
-                <button
-  type="button"
-  onClick={analyzeSelectedChat}
-  className="flex shrink-0 items-center gap-2 rounded-xl bg-[#4F46E5] px-3 py-2 text-xs font-medium text-white transition hover:bg-[#4338CA]"
->
-  <Sparkles className="size-4" />
-  <span className="hidden sm:inline">Analisis dengan AI</span>
-</button>
-              </div>
-
-              <div className="flex min-h-[320px] flex-col gap-4 bg-[#F9FAFB] p-5">
-                {selectedChat.messages.map((message) => (
                   <div
-                    key={message.id}
-                    className={`flex ${
-                      message.sender === "agent"
-                        ? "justify-end"
-                        : "justify-start"
-                    }`}
+                    className={`flex size-11 shrink-0 items-center justify-center rounded-full ${tone.bg} ${tone.text}`}
                   >
-                    <div
-                      className={`max-w-[85%] rounded-2xl px-4 py-3 ${
-                        message.sender === "agent"
-                          ? "rounded-br-sm bg-[#4F46E5] text-white"
-                          : "rounded-bl-sm border border-[#E5E7EB] bg-white text-[#111827]"
-                      }`}
-                    >
-                      <p className="whitespace-pre-wrap break-words text-sm">
-                        {message.text}
-                      </p>
-                      <div
-                        className={`mt-2 flex items-center justify-end gap-1 text-[10px] ${
-                          message.sender === "agent"
-                            ? "text-indigo-100"
-                            : "text-gray-400"
-                        }`}
-                      >
-                        {message.time}
-                        {message.sender === "agent" && (
-                          <CheckCheck className="size-3" />
+                    <User className="size-5" />
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[14px] font-bold text-[#1E293B]">
+                          {chat.name}
+                        </span>
+                        {chat.unread > 0 && (
+                          <span className="flex size-4 items-center justify-center rounded-full bg-[#2563EB] text-[10px] font-bold text-white">
+                            {chat.unread}
+                          </span>
                         )}
                       </div>
+                      <span className="text-[11px] text-[#94A3B8]">
+                        {chat.time}
+                      </span>
+                    </div>
+
+                    <p className="mt-1 line-clamp-1 text-[12.5px] text-[#64748B]">
+                      {chat.message}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Kolom Kanan: Detail Percakapan & AI Assistant */}
+        <div className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.03)]">
+          {selectedChat ? (
+            <div className="flex h-full flex-col justify-between">
+              <div>
+                {/* Header Chat Terpilih */}
+                <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-4">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`flex size-10 items-center justify-center rounded-full ${
+                        AVATAR_TONE[selectedChat.tone].bg
+                      } ${AVATAR_TONE[selectedChat.tone].text}`}
+                    >
+                      <User className="size-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-[15px] font-bold text-[#1E293B]">
+                        {selectedChat.name}
+                      </h3>
+                      <p className="text-[11px] text-[#94A3B8]">
+                        Kategori: {selectedChat.category} • {selectedChat.time}
+                      </p>
                     </div>
                   </div>
-                ))}
+
+                  <button
+                    type="button"
+                    onClick={analyzeSelectedChat}
+                    className="flex items-center gap-1.5 rounded-lg bg-[#F0FDF4] px-3 py-1.5 text-[12px] font-semibold text-[#16A34A] transition hover:bg-[#DCFCE7]"
+                  >
+                    <Sparkles className="size-3.5" />
+                    Analisis Percakapan
+                  </button>
+                </div>
+
+                {/* Hasil Analisis AI */}
+                {analysis && (
+                  <div className="mt-4 rounded-xl border border-[#BBF7D0] bg-[#F0FDF4]/60 p-4">
+                    <div className="flex items-center justify-between">
+                      <span className="inline-flex items-center gap-1 rounded-md bg-[#DCFCE7] px-2 py-0.5 text-[11px] font-bold text-[#15803D]">
+                        <Bot className="size-3" />
+                        {analysis.category}
+                      </span>
+                      <span className="text-[11px] font-medium text-[#15803D]">
+                        Prioritas: {analysis.priority}
+                      </span>
+                    </div>
+
+                    <p className="mt-2 text-[12.5px] leading-relaxed text-[#166534]">
+                      {analysis.summary}
+                    </p>
+
+                    <div className="mt-3 flex items-center justify-between border-t border-[#DCFCE7] pt-2.5">
+                      <span className="text-[11px] text-[#15803D]">
+                        Rekomendasi draf balasan siap digunakan
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setReply(analysis.draft)}
+                        className="text-[11px] font-bold text-[#15803D] underline transition hover:text-[#14532D]"
+                      >
+                        Gunakan Draf
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Daftar Balon Pesan */}
+                <div className="mt-6 max-h-[360px] space-y-3.5 overflow-y-auto pr-2">
+                  {selectedChat.messages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`flex flex-col ${
+                        msg.sender === "agent" ? "items-end" : "items-start"
+                      }`}
+                    >
+                      <div
+                        className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-[13px] leading-relaxed ${
+                          msg.sender === "agent"
+                            ? "bg-[#1D2B4D] text-white"
+                            : "bg-[#F1F5F9] text-[#1E293B]"
+                        }`}
+                      >
+                        {msg.text}
+                      </div>
+                      <span className="mt-1 text-[10px] text-[#94A3B8]">
+                        {msg.time}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
 
-{analysis?.chatId === selectedChat.id && (
-  <div className="border-t border-[#E5E7EB] bg-white p-4">
-    <div className="rounded-xl border border-[#C7D2FE] bg-[#F8FAFF] p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <Sparkles className="size-5 text-[#4F46E5]" />
-        <h4 className="font-semibold text-[#111827]">
-          Hasil Analisis AI
-        </h4>
-      </div>
-
-      <div className="space-y-3 text-sm">
-        <div>
-          <p className="text-xs text-[#6B7280]">Kategori pesan</p>
-          <p className="mt-1 font-medium text-[#111827]">
-            {analysis.category}
-          </p>
-        </div>
-
-        <div>
-          <p className="text-xs text-[#6B7280]">Prioritas</p>
-          <span
-            className={`mt-1 inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-              analysis.priority === "Tinggi"
-                ? "bg-red-100 text-red-700"
-                : analysis.priority === "Sedang"
-                  ? "bg-amber-100 text-amber-700"
-                  : "bg-green-100 text-green-700"
-            }`}
-          >
-            {analysis.priority}
-          </span>
-        </div>
-
-        <div>
-  <p className="text-xs text-[#6B7280]">
-    Alasan prioritas
-  </p>
-  <p className="mt-1 text-[#374151]">
-    {analysis.priorityReason}
-  </p>
-</div>
-
-        <div>
-          <p className="text-xs text-[#6B7280]">Ringkasan</p>
-          <p className="mt-1 text-[#374151]">
-            {analysis.summary}
-          </p>
-        </div>
-
-        <div>
-          <p className="text-xs text-[#6B7280]">Rekomendasi balasan</p>
-          <p className="mt-1 rounded-lg border border-[#E5E7EB] bg-white p-3 leading-6 text-[#374151]">
-            {analysis.draft}
-          </p>
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setReply(analysis.draft)}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#4F46E5] px-4 py-2.5 font-medium text-white transition hover:bg-[#4338CA]"
-        >
-          <PencilLine className="size-4" />
-          Gunakan draf
-        </button>
-      </div>
-
-      <p className="mt-3 text-[11px] text-[#9CA3AF]">
-        Hasil simulasi lokal. Periksa kebenaran informasi sebelum mengirim balasan.
-      </p>
-    </div>
-  </div>
-)}
-              <form
-                onSubmit={sendReply}
-                className="flex items-end gap-3 border-t border-[#E5E7EB] p-4"
-              >
-                <textarea
-                  value={reply}
-                  onChange={(event) => setReply(event.target.value)}
-                  placeholder="Tulis balasan pelanggan..."
-                  rows={2}
-                  className="min-h-11 min-w-0 flex-1 resize-y rounded-xl border border-[#D1D5DB] px-3 py-2.5 text-sm text-gray-900 outline-none transition placeholder:text-gray-400 focus:border-[#818CF8] focus:ring-2 focus:ring-indigo-100"
-                />
-                <button
-                  type="submit"
-                  disabled={!reply.trim()}
-                  className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-[#4F46E5] text-white transition hover:bg-[#4338CA] disabled:cursor-not-allowed disabled:opacity-40"
-                  aria-label="Kirim balasan"
-                >
-                  <Send className="size-4" />
-                </button>
-              </form>
-              <p className="px-4 pb-3 text-[11px] text-gray-400">
-                Mode demo: balasan hanya disimpan sementara di browser.
-              </p>
-            </>
+              {/* Input Kirim Balasan */}
+              <div className="mt-6 border-t border-[#F1F5F9] pt-4">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={reply}
+                    onChange={(e) => setReply(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") sendReply();
+                    }}
+                    placeholder="Ketik balasan untuk pelanggan..."
+                    className="h-10 flex-1 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-3.5 text-[13px] text-[#1E293B] outline-none transition focus:border-[#38BDF8]"
+                  />
+                  <button
+                    type="button"
+                    onClick={sendReply}
+                    className="flex h-10 items-center gap-1.5 rounded-xl bg-[#1D2B4D] px-4 text-[13px] font-semibold text-white transition hover:bg-[#25395F]"
+                  >
+                    <Send className="size-3.5 text-[#FFD11A]" />
+                    Kirim
+                  </button>
+                </div>
+              </div>
+            </div>
           ) : (
-            <div className="flex min-h-[420px] flex-col items-center justify-center px-6 text-center">
-              <span className="flex size-14 items-center justify-center rounded-2xl bg-[#EEF2FF] text-[#4F46E5]">
-                <MessageSquare className="size-7" />
-              </span>
-              <h3 className="mt-4 font-semibold text-[#111827]">
+            /* Empty State */
+            <div className="flex h-full min-h-[380px] flex-col items-center justify-center text-center">
+              <div className="flex size-14 items-center justify-center rounded-2xl bg-[#F0F9FF] text-[#0284C7]">
+                <MessageSquare className="size-6" />
+              </div>
+              <h3 className="mt-3 text-[15px] font-bold text-[#1E293B]">
                 Pilih percakapan
               </h3>
-              <p className="mt-2 max-w-xs text-sm text-[#6B7280]">
-                Pilih salah satu pelanggan untuk melihat pesan dan mencoba
-                mengirim balasan.
+              <p className="mt-1 max-w-[260px] text-[12.5px] leading-relaxed text-[#64748B]">
+                Pilih salah satu pelanggan untuk melihat pesan dan mencoba mengirim balasan.
               </p>
             </div>
           )}
-        </section>
+        </div>
       </div>
     </div>
   );
