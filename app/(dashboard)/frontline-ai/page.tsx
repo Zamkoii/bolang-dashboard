@@ -332,19 +332,6 @@ export default function FrontlineAIPage() {
       <div className="mt-4 flex items-center gap-4">
         <button
           type="button"
-          onClick={() => setActiveCategory(null)}
-          title="Semua kategori"
-          className={`relative flex size-[42px] items-center justify-center rounded-xl transition ${
-            activeCategory === null
-              ? "bg-[#38BDF8] text-white shadow-[0_8px_16px_rgba(56,189,248,0.45)] ring-2 ring-[#38BDF8]/40"
-              : "bg-[#38BDF8]/20 text-[#0EA5E9] hover:bg-[#38BDF8]/35"
-          }`}
-        >
-          <MessageSquare className="size-5" />
-        </button>
-
-        <button
-          type="button"
           onClick={() =>
             setActiveCategory(
               activeCategory === CHAT_CATEGORIES[0] ? null : CHAT_CATEGORIES[0]
@@ -362,16 +349,12 @@ export default function FrontlineAIPage() {
 
         <button
           type="button"
-          onClick={() =>
-            setActiveCategory(
-              activeCategory === CHAT_CATEGORIES[1] ? null : CHAT_CATEGORIES[1]
-            )
-          }
+          onClick={() => setActiveCategory(CHAT_CATEGORIES[1])}
           title={CHAT_CATEGORIES[1]}
           className={`flex size-[42px] items-center justify-center rounded-xl transition ${
             activeCategory === CHAT_CATEGORIES[1]
-              ? "bg-[#FDA4AF] text-white shadow-[0_8px_16px_rgba(253,164,175,0.5)] ring-2 ring-[#FDA4AF]/40"
-              : "bg-[#FDA4AF]/20 text-[#F43F5E] hover:bg-[#FDA4AF]/35"
+              ? "bg-[#16A34A] text-white shadow-[0_8px_16px_rgba(22,163,74,0.45)] ring-2 ring-[#16A34A]/40"
+              : "bg-[#16A34A]/20 text-[#16A34A] hover:bg-[#16A34A]/35"
           }`}
         >
           <ClipboardList className="size-5" />
@@ -379,16 +362,12 @@ export default function FrontlineAIPage() {
 
         <button
           type="button"
-          onClick={() =>
-            setActiveCategory(
-              activeCategory === CHAT_CATEGORIES[2] ? null : CHAT_CATEGORIES[2]
-            )
-          }
+          onClick={() => setActiveCategory(CHAT_CATEGORIES[2])}
           title={CHAT_CATEGORIES[2]}
           className={`flex size-[42px] items-center justify-center rounded-xl transition ${
             activeCategory === CHAT_CATEGORIES[2]
-              ? "bg-[#FCA5A5] text-white shadow-[0_8px_16px_rgba(252,165,165,0.5)] ring-2 ring-[#FCA5A5]/40"
-              : "bg-[#FCA5A5]/20 text-[#EF4444] hover:bg-[#FCA5A5]/35"
+              ? "bg-[#EF4444] text-white shadow-[0_8px_16px_rgba(239,68,68,0.45)] ring-2 ring-[#EF4444]/40"
+              : "bg-[#EF4444]/20 text-[#EF4444] hover:bg-[#EF4444]/35"
           }`}
         >
           <AlertTriangle className="size-5" />
