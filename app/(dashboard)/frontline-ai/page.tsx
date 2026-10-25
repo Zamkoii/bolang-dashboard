@@ -434,10 +434,10 @@ export default function FrontlineAIPage() {
           </div>
         </div>
 
-        <div className="rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.03)]">
+        <div className="flex h-[calc(100vh-150px)] min-h-[420px] flex-col overflow-hidden rounded-2xl border border-[#E2E8F0] bg-white p-6 shadow-[0_1px_3px_rgba(15,23,42,0.03)]">
           {selectedChat ? (
-            <div className="flex h-full flex-col justify-between">
-              <div>
+            <div className="flex h-full min-h-0 flex-col justify-between">
+              <div className="flex min-h-0 flex-1 flex-col">
                 <div className="flex items-center justify-between border-b border-[#F1F5F9] pb-4">
                   <div className="flex items-center gap-3">
                     <div
@@ -498,7 +498,7 @@ export default function FrontlineAIPage() {
                   </div>
                 )}
 
-                <div className="mt-6 max-h-[360px] space-y-3.5 overflow-y-auto pr-2">
+                <div className="mt-6 flex-1 min-h-0 space-y-3.5 overflow-y-auto pr-2">
                   {selectedChat.messages.map((msg) => (
                     <div
                       key={msg.id}
