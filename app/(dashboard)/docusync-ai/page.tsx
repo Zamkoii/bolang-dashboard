@@ -1,7 +1,20 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
 import { Bot, CloudUpload, Paperclip, Send } from "lucide-react";
 import Breadcrumb from "@/components/Breadcrumb";
+import { supabase } from "@/lib/supabase";
 
 type Message = { id: number; from: "user" | "bot"; text: string; time: string };
+
+type DocRun = {
+  id: string;
+  file_name: string | null;
+  status: string | null;
+  result_summary: string | null;
+  error_message: string | null;
+  created_at: string;
+};
 
 const MESSAGES: Message[] = [
   { id: 1, from: "user", text: "Tolong analisa laporan penjualan Q3 ini.", time: "10:42 AM" },
@@ -10,18 +23,201 @@ const MESSAGES: Message[] = [
   { id: 4, from: "bot", text: "Tentu. Berikut top 3 pelanggan: PT Maju Jaya, PT Sejahtera, dan PT Nusantara.", time: "10:46 AM" },
 ];
 
+const MAX_FILE_MB = 5;
+const ACCEPTED = /^image\/(png|jpe?g)$|^application\/pdf$/;
+
+function formatTime(iso: string) {
+  return new Date(iso).toLocaleTimeString("id-ID", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function runsToMessages(runs: DocRun[]): Message[] {
+  return runs
+    .slice()
+    .reverse()
+    .flatMap((run) => {
+      const time = formatTime(run.created_at);
+      const entries: Message[] = [
+        {
+          id: Number(run.id.replace(/\D/g, "").slice(0, 8)) || 0,
+          from: "user",
+          text: run.file_name ? `Unggah dokumen: ${run.file_name}` : "Unggah dokumen",
+          time,
+        },
+      ];
+
+      const reply =
+        run.status === "done"
+          ? run.result_summary || "Dokumen selesai diekstrak."
+          : run.status === "error"
+            ? `Gagal memproses dokumen: ${run.error_message || "terjadi kesalahan."}`
+            : "Dokumen sedang diproses oleh AI Agent…";
+
+      entries.push({
+        id: (Number(run.id.replace(/\D/g, "").slice(0, 8)) || 0) + 1,
+        from: "bot",
+        text: reply,
+        time,
+      });
+
+      return entries;
+    });
+}
+
 export default function DocuSyncPage() {
+  const [messages, setMessages] = useState<Message[]>(MESSAGES);
+  const [command, setCommand] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function loadRuns() {
+    const { data, error } = await supabase
+      .from("doc_processing_runs")
+      .select("id, file_name, status, result_summary, error_message, created_at")
+      .order("created_at", { ascending: true });
+
+    if (error || !data || data.length === 0) return;
+    setMessages(runsToMessages(data as DocRun[]));
+  }
+
+  useEffect(() => {
+    loadRuns();
+  }, []);
+
+  async function handleFile(file: File | null) {
+    if (!file || busy) return;
+    setNote("");
+
+    if (!ACCEPTED.test(file.type)) {
+      setNote("Format harus PDF, PNG, atau JPG.");
+      return;
+    }
+    if (file.size > MAX_FILE_MB * 1024 * 1024) {
+      setNote(`Ukuran maksimal ${MAX_FILE_MB} MB.`);
+      return;
+    }
+
+    setBusy(true);
+    const now = formatTime(new Date().toISOString());
+
+    setMessages((prev) => [
+      ...prev,
+      { id: Date.now(), from: "user", text: `Unggah dokumen: ${file.name}`, time: now },
+    ]);
+
+    try {
+      const { data: run, error } = await supabase
+        .from("doc_processing_runs")
+        .insert({
+          file_name: file.name,
+          storage_path: null,
+          status: "processing",
+        })
+        .select("id")
+        .single();
+
+      if (error) throw new Error(error.message);
+
+      const webhook = process.env.NEXT_PUBLIC_N8N_DOCUSYNC_URL;
+      if (!webhook) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: Date.now() + 1,
+            from: "bot",
+            text: `Dokumen "${file.name}" sudah dicatat. Webhook n8n belum dikonfigurasi, jadi file belum dikirim untuk diekstrak.`,
+            time: formatTime(new Date().toISOString()),
+          },
+        ]);
+        return;
+      }
+
+      const body = new FormData();
+      body.append("file", file);
+      body.append("run_id", run.id);
+      body.append("file_name", file.name);
+
+      const res = await fetch(webhook, { method: "POST", body });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now() + 1,
+          from: "bot",
+          text: `Dokumen "${file.name}" sedang diproses oleh AI Agent…`,
+          time: formatTime(new Date().toISOString()),
+        },
+      ]);
+
+      await loadRuns();
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now() + 1,
+          from: "bot",
+          text: `Gagal: ${(err as Error).message}`,
+          time: formatTime(new Date().toISOString()),
+        },
+      ]);
+    } finally {
+      setBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  function sendCommand() {
+    const text = command.trim();
+    if (!text || busy) return;
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now(),
+        from: "user",
+        text,
+        time: formatTime(new Date().toISOString()),
+      },
+      {
+        id: Date.now() + 1,
+        from: "bot",
+        text: "Perintah diterima. Unggah dokumen (PDF/PNG/JPG) agar AI Agent dapat memprosesnya.",
+        time: formatTime(new Date().toISOString()),
+      },
+    ]);
+
+    setCommand("");
+  }
+
   return (
-    <div className="flex min-h-full flex-col px-10 pb-7 pt-[26px]">
+    <div className="flex min-h-[calc(100vh-30px)] flex-col px-10 pb-10 pt-[30px]">
       <Breadcrumb current="DocuSync AI" />
 
-      {/* Area upload */}
-      <label className="mt-[18px] flex h-[200px] cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-[#93C5FD] bg-[#EFF6FF] transition hover:bg-[#E8F1FE]">
-        <input type="file" accept=".pdf,.png,.jpg,.jpeg" className="sr-only" />
-        <span className="flex size-14 items-center justify-center rounded-xl bg-[#DBEAFE] text-[#2563EB]">
-          <CloudUpload className="size-7" strokeWidth={1.75} />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/pdf,image/png,image/jpeg"
+        className="hidden"
+        onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
+      />
+
+      <label
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          handleFile(e.dataTransfer.files?.[0] ?? null);
+        }}
+        onClick={() => fileInputRef.current?.click()}
+        className="mt-3 flex h-[175px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-[#BFDBFE] bg-[#EFF6FF] transition hover:bg-[#E8F2FF]"
+      >
+        <span className="flex size-12 items-center justify-center rounded-xl bg-white text-[#3B82F6] shadow-[0_1px_3px_rgba(15,23,42,0.06)]">
+          <CloudUpload className="size-6" strokeWidth={1.75} />
         </span>
-        <span className="mt-4 text-[16px] font-bold text-[#1E3A8A]">
+        <span className="mt-3 text-[14px] font-bold text-[#111827]">
           Seret &amp; lepas dokumen Anda di sini
         </span>
         <span className="mt-2 text-[13px] text-[#6B7280]">
@@ -29,7 +225,8 @@ export default function DocuSyncPage() {
         </span>
       </label>
 
-      {/* Riwayat chat */}
+      {note && <p className="mt-2 text-[12px] text-red-500">{note}</p>}
+
       <section className="mt-4 rounded-2xl border border-[#E5E7EB] bg-white p-5 shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
         <div className="flex items-center justify-between">
           <h2 className="text-[14px] font-bold text-[#111827]">History Chat</h2>
@@ -39,10 +236,10 @@ export default function DocuSyncPage() {
         </div>
 
         <div className="mt-3 flex flex-col gap-2.5">
-          {MESSAGES.map((m) =>
+          {messages.map((m) =>
             m.from === "user" ? (
               <div key={m.id} className="flex justify-end">
-                <div className="max-w-[520px] rounded-2xl bg-[#2563EB] px-3.5 py-2.5 text-white">
+                <div className="max-w-[70%] rounded-2xl bg-[#2563EB] px-4 py-2.5 text-white">
                   <p className="text-[13px] leading-[18px]">{m.text}</p>
                   <span className="mt-0.5 block text-[10px] leading-3 text-white/70">
                     {m.time}
@@ -51,26 +248,26 @@ export default function DocuSyncPage() {
               </div>
             ) : (
               <div key={m.id} className="flex items-start gap-2.5">
-                <span className="flex size-[26px] shrink-0 items-center justify-center rounded-full bg-[#EFF6FF] text-[#2563EB]">
-                  <Bot className="size-[14px]" strokeWidth={2} />
+                <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-[#EFF6FF] text-[#3B82F6]">
+                  <Bot className="size-4" strokeWidth={1.75} />
                 </span>
-                <div className="max-w-[520px] rounded-2xl bg-[#F1F5F9] px-3.5 py-2.5 text-[#374151]">
+                <div className="max-w-[70%] rounded-2xl bg-[#F1F5F9] px-4 py-2.5 text-[#111827]">
                   <p className="text-[13px] leading-[18px]">{m.text}</p>
                   <span className="mt-0.5 block text-[10px] leading-3 text-[#94A3B8]">
                     {m.time}
                   </span>
                 </div>
               </div>
-            ),
+            )
           )}
         </div>
       </section>
 
-      {/* Input perintah (menempel di bawah) */}
       <div className="mt-auto pt-6">
         <div className="flex h-[78px] items-center gap-4 rounded-2xl border border-[#E5E7EB] bg-white px-[22px] shadow-[0_1px_3px_rgba(15,23,42,0.04)]">
           <button
             type="button"
+            onClick={() => fileInputRef.current?.click()}
             aria-label="Lampirkan file"
             className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-[#F1F5F9] text-[#64748B] transition hover:bg-[#E8EDF3]"
           >
@@ -78,13 +275,20 @@ export default function DocuSyncPage() {
           </button>
           <input
             type="text"
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") sendCommand();
+            }}
             placeholder="Silakan upload file Anda atau ketik perintah..."
-            className="min-w-0 flex-1 bg-transparent text-[14px] text-[#111827] outline-none placeholder:text-[#94A3B8]"
+            className="flex-1 bg-transparent text-[14px] text-[#111827] outline-none placeholder:text-[#94A3B8]"
           />
           <button
             type="button"
-            aria-label="Kirim"
-            className="flex size-[46px] shrink-0 items-center justify-center rounded-xl bg-[#2563EB] text-white transition hover:bg-[#1D4ED8]"
+            onClick={sendCommand}
+            disabled={busy || !command.trim()}
+            aria-label="Kirim perintah"
+            className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-[#2563EB] text-white transition hover:bg-[#1D4ED8] disabled:opacity-40"
           >
             <Send className="size-5" strokeWidth={1.75} />
           </button>
