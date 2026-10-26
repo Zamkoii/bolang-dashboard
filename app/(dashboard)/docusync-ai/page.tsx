@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Bot, CloudUpload, Paperclip, Send } from "lucide-react";
 import Breadcrumb from "@/components/Breadcrumb";
 import { supabase } from "@/lib/supabase";
+import { uploadDocToN8n } from "./actions";
 
 type Message = { id: number; from: "user" | "bot"; text: string; time: string };
 
@@ -39,9 +40,10 @@ function runsToMessages(runs: DocRun[]): Message[] {
     .reverse()
     .flatMap((run) => {
       const time = formatTime(run.created_at);
+      const runIdNum = Number(run.id.replace(/\D/g, "").slice(0, 8)) || 0;
       const entries: Message[] = [
         {
-          id: Number(run.id.replace(/\D/g, "").slice(0, 8)) || 0,
+          id: runIdNum,
           from: "user",
           text: run.file_name ? `Unggah dokumen: ${run.file_name}` : "Unggah dokumen",
           time,
@@ -56,7 +58,7 @@ function runsToMessages(runs: DocRun[]): Message[] {
             : "Dokumen sedang diproses oleh AI Agent…";
 
       entries.push({
-        id: (Number(run.id.replace(/\D/g, "").slice(0, 8)) || 0) + 1,
+        id: runIdNum + 1,
         from: "bot",
         text: reply,
         time,
@@ -72,12 +74,16 @@ export default function DocuSyncPage() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const historyRef = useRef<HTMLDivElement>(null);
+
+  const HISTORY_LIMIT = 5;
 
   async function loadRuns() {
     const { data, error } = await supabase
       .from("doc_processing_runs")
       .select("id, file_name, status, result_summary, error_message, created_at")
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: false })
+      .limit(HISTORY_LIMIT);
 
     if (error || !data || data.length === 0) return;
     setMessages(runsToMessages(data as DocRun[]));
@@ -86,6 +92,13 @@ export default function DocuSyncPage() {
   useEffect(() => {
     loadRuns();
   }, []);
+
+  useEffect(() => {
+    historyRef.current?.scrollTo({
+      top: historyRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [messages]);
 
   async function handleFile(file: File | null) {
     if (!file || busy) return;
@@ -102,10 +115,12 @@ export default function DocuSyncPage() {
 
     setBusy(true);
     const now = formatTime(new Date().toISOString());
+    const pendingId = Date.now();
+    const botId = pendingId + 1;
 
     setMessages((prev) => [
       ...prev,
-      { id: Date.now(), from: "user", text: `Unggah dokumen: ${file.name}`, time: now },
+      { id: pendingId, from: "user", text: `Unggah dokumen: ${file.name}`, time: now },
     ]);
 
     try {
@@ -121,48 +136,31 @@ export default function DocuSyncPage() {
 
       if (error) throw new Error(error.message);
 
-      const webhook = process.env.NEXT_PUBLIC_N8N_DOCUSYNC_URL;
-      if (!webhook) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: Date.now() + 1,
-            from: "bot",
-            text: `Dokumen "${file.name}" sudah dicatat. Webhook n8n belum dikonfigurasi, jadi file belum dikirim untuk diekstrak.`,
-            time: formatTime(new Date().toISOString()),
-          },
-        ]);
-        return;
-      }
-
       const body = new FormData();
       body.append("file", file);
       body.append("run_id", run.id);
       body.append("file_name", file.name);
 
-      const res = await fetch(webhook, { method: "POST", body });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const result = await uploadDocToN8n(body);
+
+      if (!result.ok) {
+        throw new Error(result.error || "Gagal mengirim dokumen");
+      }
+
+      const botReply = result.mock
+        ? `Dokumen "${file.name}" sudah dicatat di database. Webhook n8n belum dikonfigurasi di .env.local, jadi proses ekstraksi ditunda.`
+        : `Dokumen "${file.name}" sedang diproses oleh AI Agent…`;
 
       setMessages((prev) => [
         ...prev,
-        {
-          id: Date.now() + 1,
-          from: "bot",
-          text: `Dokumen "${file.name}" sedang diproses oleh AI Agent…`,
-          time: formatTime(new Date().toISOString()),
-        },
+        { id: botId, from: "bot", text: botReply, time: formatTime(new Date().toISOString()) },
       ]);
 
       await loadRuns();
     } catch (err) {
       setMessages((prev) => [
         ...prev,
-        {
-          id: Date.now() + 1,
-          from: "bot",
-          text: `Gagal: ${(err as Error).message}`,
-          time: formatTime(new Date().toISOString()),
-        },
+        { id: botId, from: "bot", text: `Gagal: ${(err as Error).message}`, time: formatTime(new Date().toISOString()) },
       ]);
     } finally {
       setBusy(false);
@@ -235,7 +233,10 @@ export default function DocuSyncPage() {
           </span>
         </div>
 
-        <div className="mt-3 flex flex-col gap-2.5">
+        <div
+          ref={historyRef}
+          className="mt-3 flex max-h-[340px] flex-col gap-2.5 overflow-y-auto pr-1"
+        >
           {messages.map((m) =>
             m.from === "user" ? (
               <div key={m.id} className="flex justify-end">
