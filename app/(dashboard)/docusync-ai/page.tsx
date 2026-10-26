@@ -288,7 +288,7 @@ export default function DocuSyncPage() {
             type="button"
             onClick={sendCommand}
             disabled={busy || !command.trim()}
-            aria-label="Kirim perintah"
+            aria-label="Kirim perintahh"
             className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-[#2563EB] text-white transition hover:bg-[#1D4ED8] disabled:opacity-40"
           >
             <Send className="size-5" strokeWidth={1.75} />
