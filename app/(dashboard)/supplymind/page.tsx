@@ -148,7 +148,7 @@ export default async function SupplyMindPage() {
           Kadar Stok Bahan Baku (PPIC)
         </h2>
 
-        {/* Sumbu Y */}
+        {/* Sumbu Y  */}
         <div className="absolute left-7 top-[97px] flex h-[246px] flex-col justify-between text-[11px] leading-none text-[#9CA3AF]">
           {yTicks.map((tick) => (
             <span key={tick} className="-my-[5px]">
@@ -158,34 +158,40 @@ export default async function SupplyMindPage() {
         </div>
 
         {/* Batang */}
-        <div className="absolute left-[84px] right-[44px] top-[97px] flex">
-          {MATERIALS.map((bar, index) => {
-            const height = Math.min(
-              PLOT_HEIGHT,
-              Math.max(0, Math.round((bar.value / chartMax) * PLOT_HEIGHT))
-            );
+        <div className="absolute bottom-0 left-[84px] right-0 top-[97px] overflow-x-auto">
+          <div className="flex min-w-full w-max pr-4">
+            {MATERIALS.map((bar, index) => {
+              const height = Math.min(
+                PLOT_HEIGHT,
+                Math.max(0, Math.round((bar.value / chartMax) * PLOT_HEIGHT))
+              );
 
-            return (
-              <div
-                key={`${bar.label}-${index}`}
-                className="relative flex h-[230px] min-w-0 flex-1 flex-col items-center justify-end"
-              >
-                <span className={`mb-2 text-[13px] font-bold ${bar.text}`}>
-                  {bar.value.toLocaleString("id-ID")}
-                </span>
+              return (
                 <div
-                  className={`w-[54px] max-w-full rounded-t-[10px] bg-gradient-to-b ${bar.gradient}`}
-                  style={{ height }}
-                />
-                <span
-                  title={bar.label}
-                  className="absolute left-1/2 top-full mt-2 w-full -translate-x-1/2 truncate px-1 text-center text-[13px] text-[#374151]"
+                  key={`${bar.label}-${index}`}
+                  className="flex min-w-max flex-1 flex-col items-center px-2"
                 >
-                  {bar.label}
-                </span>
-              </div>
-            );
-          })}
+                  <div className="flex h-[230px] flex-col items-center justify-end">
+                    <span
+                      className={`mb-2 whitespace-nowrap text-[13px] font-bold ${bar.text}`}
+                    >
+                      {bar.value.toLocaleString("id-ID")}
+                    </span>
+                    <div
+                      className={`w-[54px] rounded-t-[10px] bg-gradient-to-b ${bar.gradient}`}
+                      style={{ height }}
+                    />
+                  </div>
+                  <span
+                    title={bar.label}
+                    className="mt-2 whitespace-nowrap text-[13px] text-[#374151]"
+                  >
+                    {bar.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </section>
 
