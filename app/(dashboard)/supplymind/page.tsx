@@ -1,10 +1,8 @@
 import { supabase } from "@/lib/supabase";
-import SupplyMindActions from "@/app/(dashboard)/supplymind/supplymind-actions";
-import { Sparkles } from "lucide-react";  
+import { Sparkles } from "lucide-react";
 import Breadcrumb from "@/components/Breadcrumb";
+import SupplyMindActions from "@/app/(dashboard)/supplymind/supplymind-actions";
 
-const Y_AXIS = ["3.000", "2.500", "2.000", "1.500", "1.000", "500", "0"];
-const MAX = 3000;
 const PLOT_HEIGHT = 230;
 
 // Data simulasi bahan baku sebagai cadangan.
@@ -69,18 +67,19 @@ export default async function SupplyMindPage() {
   // Jika data berhasil diambil, gunakan data Supabase.
   // Jika tabel kosong atau query gagal, gunakan data simulasi.
   const usingDemoData = !!error || !data || data.length === 0;
-console.log("SupplyMind query result:", {
-  error: error
-    ? {
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-        code: error.code,
-      }
-    : null,
-  data,
-  dataLength: data?.length,
-});
+
+  console.log("SupplyMind query result:", {
+    error: error
+      ? {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code,
+        }
+      : null,
+    data,
+    dataLength: data?.length,
+  });
 
   const MATERIALS = usingDemoData
     ? DEMO_MATERIALS
@@ -90,6 +89,15 @@ console.log("SupplyMind query result:", {
         safeStock: Number(item.minimum_stock) || 0,
         ...BAR_STYLES[index % BAR_STYLES.length],
       }));
+
+  // Skala dinamis: mengikuti nilai tertinggi, kelipatan rapi, minimal 3.000.
+  const rawMax = Math.max(...MATERIALS.map((m) => m.value), 3000);
+  const step = Math.ceil(rawMax / 6 / 500) * 500;
+  const chartMax = step * 6;
+
+  const yTicks = Array.from({ length: 7 }, (_, i) =>
+    (step * (6 - i)).toLocaleString("id-ID")
+  );
 
   // Analisis stok berdasarkan batas minimum.
   const criticalMaterials = MATERIALS.filter(
@@ -102,8 +110,7 @@ console.log("SupplyMind query result:", {
   );
 
   const totalShortage = criticalMaterials.reduce(
-    (total, material) =>
-      total + material.safeStock - material.value,
+    (total, material) => total + material.safeStock - material.value,
     0
   );
 
@@ -143,7 +150,7 @@ console.log("SupplyMind query result:", {
 
         {/* Sumbu Y */}
         <div className="absolute left-7 top-[97px] flex h-[246px] flex-col justify-between text-[11px] leading-none text-[#9CA3AF]">
-          {Y_AXIS.map((tick) => (
+          {yTicks.map((tick) => (
             <span key={tick} className="-my-[5px]">
               {tick}
             </span>
@@ -152,25 +159,28 @@ console.log("SupplyMind query result:", {
 
         {/* Batang */}
         <div className="absolute left-[84px] right-[44px] top-[97px] flex">
-          {MATERIALS.map((bar) => {
+          {MATERIALS.map((bar, index) => {
             const height = Math.min(
               PLOT_HEIGHT,
-              Math.max(0, Math.round((bar.value / MAX) * PLOT_HEIGHT))
+              Math.max(0, Math.round((bar.value / chartMax) * PLOT_HEIGHT))
             );
 
             return (
               <div
-                key={bar.label}
-                className="relative flex h-[230px] flex-1 flex-col items-center justify-end"
+                key={`${bar.label}-${index}`}
+                className="relative flex h-[230px] min-w-0 flex-1 flex-col items-center justify-end"
               >
                 <span className={`mb-2 text-[13px] font-bold ${bar.text}`}>
                   {bar.value.toLocaleString("id-ID")}
                 </span>
                 <div
-                  className={`w-[54px] rounded-t-[10px] bg-gradient-to-b ${bar.gradient}`}
+                  className={`w-[54px] max-w-full rounded-t-[10px] bg-gradient-to-b ${bar.gradient}`}
                   style={{ height }}
                 />
-                <span className="absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap text-[13px] text-[#374151]">
+                <span
+                  title={bar.label}
+                  className="absolute left-1/2 top-full mt-2 w-full -translate-x-1/2 truncate px-1 text-center text-[13px] text-[#374151]"
+                >
                   {bar.label}
                 </span>
               </div>
