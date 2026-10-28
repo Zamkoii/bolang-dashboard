@@ -202,7 +202,7 @@ export default async function SupplyMindPage() {
         </span>
         <div>
           <h3 className="text-[15px] font-bold text-[#111827]">
-            AI Insights - Rekomendasi MRP
+            AI Insights - Rekomendasi MRP  (Material Requirement Planning)
           </h3>
           <p className="mt-1.5 text-[13.5px] leading-[22px] text-[#4B5563]">
             {insightMessage}
