@@ -4,7 +4,7 @@
 > **Frontline AI** (layanan pelanggan), **SupplyMind** (perencanaan kebutuhan bahan baku),
 > dan **DocuSync AI** (pemrosesan dokumen) — didukung marketplace sebagai sumber data transaksi nyata.
 
-## 🎯 Latar Belakang
+## Latar Belakang
 
 Perusahaan distribusi baterai menghadapi tiga masalah klasik: layanan pelanggan yang lambat
 menanggapi komplain, stok bahan baku yang tidak terpantau sampai terlambat, dan data nota/faktur
@@ -12,7 +12,7 @@ vendor yang masuk manual. Bolang menjawab ketiganya dengan tiga AI Agent yang be
 satu database yang sama — sehingga data mengalir dari pelanggan → analisis → keputusan tanpa
 input ulang.
 
-## 🤖 Fitur Utama
+## Fitur Utama
 
 ### Frontline AI — Customer Service Triage
 - Daftar percakapan pelanggan real-time dari database, dikelompokkan per sesi.
