@@ -13,7 +13,10 @@ type StockPayload = {
   requestedAt: string;
 };
 
-async function postJson(webhook: string, payload: StockPayload) {
+// Payload yang benar-benar dikirim ke n8n: StockPayload + field action
+type WebhookPayload = StockPayload & { action: string };
+
+async function postJson(webhook: string, payload: WebhookPayload) {
   try {
     const res = await fetch(webhook, {
       method: "POST",
