@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bot,
   ClipboardList,
+  Hand,
   MessageSquare,
+  RotateCcw,
   Search,
   Send,
   Sparkles,
@@ -16,7 +18,7 @@ import { supabase } from "@/lib/supabase";
 
 type ChatMessage = {
   id: number;
-  sender: "customer" | "agent";
+  sender: "customer" | "agent" | "ai";
   text: string;
   time: string;
 };
@@ -28,9 +30,7 @@ type Chat = {
   category: string;
   message: string;
   time: string;
-  unread: number;
   tone: "indigo" | "fuchsia";
-  messages: ChatMessage[];
 };
 
 type Analysis = {
@@ -52,6 +52,14 @@ type CustomerChatRow = {
   created_at: string;
 };
 
+type ChatMessageRow = {
+  id: number;
+  session_id: string;
+  sender: string;
+  message: string;
+  created_at: string;
+};
+
 const CHAT_CATEGORIES = [
   "Informasi Produk & Estimasi",
   "Ubah Data atau Kendala Pesanan",
@@ -68,16 +76,7 @@ const INITIAL_CHATS: Chat[] = [
     category: "Informasi Produk & Estimasi",
     message: "Apakah stok produk A warna pink masih ada?",
     time: "3m ago",
-    unread: 2,
     tone: "indigo",
-    messages: [
-      {
-        id: 1,
-        sender: "customer",
-        text: "Apakah stok produk A warna pink masih ada?",
-        time: "10:22",
-      },
-    ],
   },
   {
     id: 2,
@@ -86,29 +85,35 @@ const INITIAL_CHATS: Chat[] = [
     category: "Ubah Data atau Kendala Pesanan",
     message: "Kira-kira estimasi sampai barangnya ke Bogor berapa hari ya?",
     time: "15m ago",
-    unread: 0,
     tone: "fuchsia",
-    messages: [
-      {
-        id: 1,
-        sender: "customer",
-        text: "Kira-kira estimasi sampai barangnya ke Bogor berapa hari ya?",
-        time: "10:08",
-      },
-    ],
   },
 ];
 
-const AVATAR_TONE = {
-  indigo: {
-    bg: "bg-[#EEF2FF]",
-    text: "text-[#6366F1]",
-  },
-  fuchsia: {
-    bg: "bg-[#FDF4FF]",
-    text: "text-[#D946EF]",
-  },
+const DEMO_THREADS: Record<string, ChatMessage[]> = {
+  "demo-1": [
+    {
+      id: 1,
+      sender: "customer",
+      text: "Apakah stok produk A warna pink masih ada?",
+      time: "10:22",
+    },
+  ],
+  "demo-2": [
+    {
+      id: 1,
+      sender: "customer",
+      text: "Kira-kira estimasi sampai barangnya ke Bogor berapa hari ya?",
+      time: "10:08",
+    },
+  ],
 };
+
+const AVATAR_TONE = {
+  indigo: { bg: "bg-[#EEF2FF]", text: "text-[#6366F1]" },
+  fuchsia: { bg: "bg-[#FDF4FF]", text: "text-[#D946EF]" },
+};
+
+const POLL_MS = 3000;
 
 function formatRelativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -124,85 +129,172 @@ export default function FrontlineAIPage() {
   const [chats, setChats] = useState<Chat[]>(INITIAL_CHATS);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [reply, setReply] = useState("");
-  const [activeCategory, setActiveCategory] = useState<ChatCategory | null>(null);
+  const [activeCategory, setActiveCategory] =
+    useState<ChatCategory>(CHAT_CATEGORIES[0]);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
 
+  const [thread, setThread] = useState<ChatMessage[]>([]);
+  const [handledBy, setHandledBy] = useState<"ai" | "human">("ai");
+  const [busyAction, setBusyAction] = useState(false);
+  const [note, setNote] = useState("");
+
+  const threadRef = useRef<HTMLDivElement>(null);
+
+  const selectedChat = chats.find((chat) => chat.id === selectedId) ?? null;
+  const sessionId = selectedChat?.sessionId ?? null;
+
+  // ---- daftar sesi dari customer_chats ----
   useEffect(() => {
-    let isMounted = true;
+    let mounted = true;
 
-    async function loadConversations() {
-      try {
-        const { data, error } = await supabase
-          .from("customer_chats")
-          .select("id, session_id, customer_name, category, question, created_at")
-          .order("created_at", { ascending: false });
+    (async () => {
+      const { data, error } = await supabase
+        .from("customer_chats")
+        .select("id, session_id, customer_name, category, question, created_at")
+        .order("created_at", { ascending: false });
 
-        if (!isMounted || error || !data || data.length === 0) return;
+      if (!mounted || error || !data || data.length === 0) return;
 
-        const liveChats: Chat[] = data.map(
-          (row: CustomerChatRow, index: number) => {
-            const timeFormatted = new Date(row.created_at).toLocaleTimeString(
-              "id-ID",
-              { hour: "2-digit", minute: "2-digit" }
-            );
-
-            return {
-              id: row.id,
-              sessionId: row.session_id,
-              name: row.customer_name || `Pelanggan #${row.id}`,
-              category: row.category || "Umum",
-              message: row.question || "",
-              time: formatRelativeTime(row.created_at),
-              unread: 0,
-              tone: index % 2 === 0 ? ("indigo" as const) : ("fuchsia" as const),
-              messages: [
-                {
-                  id: 1,
-                  sender: "customer" as const,
-                  text: row.question || "",
-                  time: timeFormatted,
-                },
-              ],
-            };
-          }
-        );
-
-        setChats(liveChats);
-      } catch {
-        // Tetap menggunakan INITIAL_CHATS jika terjadi kendala
-      }
-    }
-
-    loadConversations();
+      setChats(
+        data.map((row: CustomerChatRow, index: number) => ({
+          id: row.id,
+          sessionId: row.session_id,
+          name: row.customer_name || `Pelanggan #${row.id}`,
+          category: row.category || "Umum",
+          message: row.question || "",
+          time: formatRelativeTime(row.created_at),
+          tone: index % 2 === 0 ? ("indigo" as const) : ("fuchsia" as const),
+        }))
+      );
+    })();
 
     return () => {
-      isMounted = false;
+      mounted = false;
     };
   }, []);
 
-  const selectedChat = chats.find((chat) => chat.id === selectedId) ?? null;
+  // ---- isi percakapan + status pengelolaan, polling ----
+  const loadThread = useCallback(async () => {
+    if (!sessionId) return;
 
-  const unreadTotal = chats.reduce((total, chat) => total + chat.unread, 0);
+    const [msgs, handover] = await Promise.all([
+      supabase
+        .from("chat_messages")
+        .select("id, session_id, sender, message, created_at")
+        .eq("session_id", sessionId)
+        .order("id", { ascending: true }),
+      supabase
+        .from("chat_handover")
+        .select("session_id, handled_by")
+        .eq("session_id", sessionId)
+        .maybeSingle(),
+    ]);
+
+    if (!msgs.error && msgs.data && msgs.data.length > 0) {
+      setThread(
+        (msgs.data as ChatMessageRow[]).map((m) => ({
+          id: m.id,
+          sender:
+            m.sender === "customer"
+              ? "customer"
+              : m.sender === "agent"
+                ? "agent"
+                : "ai",
+          text: m.message,
+          time: new Date(m.created_at).toLocaleTimeString("id-ID", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+        }))
+      );
+    } else {
+      setThread(DEMO_THREADS[sessionId] ?? []);
+    }
+
+    setHandledBy(handover.data?.handled_by === "human" ? "human" : "ai");
+  }, [sessionId]);
+
+  useEffect(() => {
+    setAnalysis(null);
+    setNote("");
+    loadThread();
+
+    if (!sessionId) return;
+    const timer = setInterval(loadThread, POLL_MS);
+    return () => clearInterval(timer);
+  }, [sessionId, loadThread]);
+
+  useEffect(() => {
+    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
+  }, [thread]);
 
   const visibleChats = chats.filter(
-    (chat) => activeCategory === null || chat.category === activeCategory
+    (chat) => chat.category === activeCategory
   );
 
   function openChat(chat: Chat) {
     setSelectedId(chat.id);
     setAnalysis(null);
+  }
 
-    setChats((previous) =>
-      previous.map((item) =>
-        item.id === chat.id ? { ...item, unread: 0 } : item
-      )
+  // ---- ambil alih / kembalikan ke AI ----
+  async function setHandover(next: "ai" | "human") {
+    if (!sessionId || busyAction) return;
+    setBusyAction(true);
+    setNote("");
+
+    const { error } = await supabase.from("chat_handover").upsert(
+      {
+        session_id: sessionId,
+        handled_by: next,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "session_id" }
     );
+
+    if (error) {
+      setNote(`Gagal: ${error.message}`);
+    } else {
+      setHandledBy(next);
+      setNote(
+        next === "human"
+          ? "Percakapan diambil alih. Balasan AI otomatis dihentikan."
+          : "Percakapan dikembalikan ke AI."
+      );
+    }
+
+    setBusyAction(false);
+  }
+
+  // ---- kirim balasan CS ----
+  async function sendReply() {
+    const cleanReply = reply.trim();
+    if (!cleanReply || !sessionId || handledBy !== "human") return;
+
+    setBusyAction(true);
+    setNote("");
+
+    const { error } = await supabase.from("chat_messages").insert({
+      session_id: sessionId,
+      sender: "agent",
+      message: cleanReply,
+    });
+
+    if (error) {
+      setNote(`Gagal mengirim: ${error.message}`);
+    } else {
+      setReply("");
+      await loadThread();
+      threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
+    }
+
+    setBusyAction(false);
   }
 
   function analyzeSelectedChat() {
     if (!selectedChat) return;
 
-    const customerMessages = selectedChat.messages
+    const customerMessages = thread
       .filter((message) => message.sender === "customer")
       .map((message) => message.text.trim())
       .filter(Boolean);
@@ -239,7 +331,6 @@ export default function FrontlineAIPage() {
       latestCustomerMessage
     );
 
-    // Kategori diambil dari kolom database, tidak ditimpa keyword.
     const category = selectedChat.category || "Informasi Umum";
 
     let priority: "Tinggi" | "Sedang" | "Rendah" = "Rendah";
@@ -270,8 +361,7 @@ export default function FrontlineAIPage() {
       priority = "Sedang";
       priorityReason =
         "Pelanggan membutuhkan informasi mengenai pesanan atau proses pengiriman.";
-      summary =
-        "Pelanggan menanyakan pesanan atau estimasi pengiriman.";
+      summary = "Pelanggan menanyakan pesanan atau estimasi pengiriman.";
       draft =
         "Halo Kak, terima kasih sudah menghubungi kami. Kami bantu periksa status pesanan dan estimasi pengirimannya terlebih dahulu ya.";
     } else if (hasStockQuestion) {
@@ -289,59 +379,27 @@ export default function FrontlineAIPage() {
       priority,
       priorityReason,
       confidence: "96%",
-      sentiment: hasComplaint || hasPaymentIssue ? "Negatif / Mendesak" : "Positif / Netral",
+      sentiment:
+        hasComplaint || hasPaymentIssue ? "Negatif / Mendesak" : "Positif / Netral",
       summary,
       draft,
     });
-  }
-
-  function sendReply() {
-    const cleanReply = reply.trim();
-    if (!cleanReply || !selectedChat) return;
-
-    const newMessage: ChatMessage = {
-      id: selectedChat.messages.length + 1,
-      sender: "agent",
-      text: cleanReply,
-      time: new Date().toLocaleTimeString("id-ID", {
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    };
-
-    setChats((previous) =>
-      previous.map((chat) =>
-        chat.id === selectedChat.id
-          ? {
-              ...chat,
-              message: cleanReply,
-              messages: [...chat.messages, newMessage],
-            }
-          : chat
-      )
-    );
-
-    setReply("");
   }
 
   return (
     <div className="px-10 pb-10 pt-[30px]">
       <Breadcrumb current="Frontline AI" />
 
-      {/* Filter kategori */}
+      {/* Filter kategori: Blue, Green, Red */}
       <div className="mt-4 flex items-center gap-4">
         <button
           type="button"
-          onClick={() =>
-            setActiveCategory(
-              activeCategory === CHAT_CATEGORIES[0] ? null : CHAT_CATEGORIES[0]
-            )
-          }
+          onClick={() => setActiveCategory(CHAT_CATEGORIES[0])}
           title={CHAT_CATEGORIES[0]}
           className={`flex size-[42px] items-center justify-center rounded-xl transition ${
             activeCategory === CHAT_CATEGORIES[0]
-              ? "bg-[#818CF8] text-white shadow-[0_8px_16px_rgba(129,140,248,0.45)] ring-2 ring-[#818CF8]/40"
-              : "bg-[#818CF8]/20 text-[#6366F1] hover:bg-[#818CF8]/35"
+              ? "bg-[#0EA5E9] text-white shadow-[0_8px_16px_rgba(14,165,233,0.45)] ring-2 ring-[#0EA5E9]/40"
+              : "bg-[#0EA5E9]/20 text-[#0EA5E9] hover:bg-[#0EA5E9]/35"
           }`}
         >
           <Search className="size-5" />
@@ -375,7 +433,7 @@ export default function FrontlineAIPage() {
       </div>
 
       {/* Konten utama */}
-      <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[400px_1fr]">
+      <div className="mt-8 grid grid-cols-1 items-start gap-6 lg:grid-cols-[400px_1fr]">
         <div>
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-[16px] font-bold text-[#1E293B]">
@@ -409,16 +467,9 @@ export default function FrontlineAIPage() {
 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[14px] font-bold text-[#1E293B]">
-                          {chat.name}
-                        </span>
-                        {chat.unread > 0 && (
-                          <span className="flex size-4 items-center justify-center rounded-full bg-[#2563EB] text-[10px] font-bold text-white">
-                            {chat.unread}
-                          </span>
-                        )}
-                      </div>
+                      <span className="text-[14px] font-bold text-[#1E293B]">
+                        {chat.name}
+                      </span>
                       <span className="text-[11px] text-[#94A3B8]">
                         {chat.time}
                       </span>
@@ -490,7 +541,8 @@ export default function FrontlineAIPage() {
                       <button
                         type="button"
                         onClick={() => setReply(analysis.draft)}
-                        className="text-[11px] font-bold text-[#15803D] underline transition hover:text-[#14532D]"
+                        disabled={handledBy !== "human"}
+                        className="text-[11px] font-bold text-[#15803D] underline transition hover:text-[#14532D] disabled:opacity-40"
                       >
                         Gunakan Draf
                       </button>
@@ -498,8 +550,17 @@ export default function FrontlineAIPage() {
                   </div>
                 )}
 
-                <div className="mt-6 flex-1 min-h-0 space-y-3.5 overflow-y-auto pr-2">
-                  {selectedChat.messages.map((msg) => (
+                <div
+                  ref={threadRef}
+                  className="mt-6 flex-1 min-h-0 space-y-3.5 overflow-y-auto pr-2"
+                >
+                  {thread.length === 0 && (
+                    <p className="py-8 text-center text-[12.5px] text-[#94A3B8]">
+                      Belum ada pesan pada sesi ini.
+                    </p>
+                  )}
+
+                  {thread.map((msg) => (
                     <div
                       key={msg.id}
                       className={`flex flex-col ${
@@ -523,27 +584,61 @@ export default function FrontlineAIPage() {
                 </div>
               </div>
 
-              <div className="mt-6 border-t border-[#F1F5F9] pt-4">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={reply}
-                    onChange={(e) => setReply(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") sendReply();
-                    }}
-                    placeholder="Ketik balasan untuk pelanggan..."
-                    className="h-10 flex-1 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-3.5 text-[13px] text-[#1E293B] outline-none transition focus:border-[#38BDF8]"
-                  />
-                  <button
-                    type="button"
-                    onClick={sendReply}
-                    className="flex h-10 items-center gap-1.5 rounded-xl bg-[#1D2B4D] px-4 text-[13px] font-semibold text-white transition hover:bg-[#25395F]"
-                  >
-                    <Send className="size-3.5 text-[#FFD11A]" />
-                    Kirim
-                  </button>
-                </div>
+              {note && (
+                <p className="mt-3 text-[11.5px] text-[#64748B]">{note}</p>
+              )}
+
+              <div className="mt-4 border-t border-[#F1F5F9] pt-4">
+                {handledBy === "ai" ? (
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[12.5px] text-[#64748B]">
+                      Dibalas otomatis oleh AI.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setHandover("human")}
+                      disabled={busyAction}
+                      className="flex h-10 items-center gap-1.5 rounded-xl bg-[#1D2B4D] px-4 text-[13px] font-semibold text-white transition hover:bg-[#25395F] disabled:opacity-40"
+                    >
+                      <Hand className="size-3.5 text-[#FFD11A]" />
+                      Ambil Alih
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={reply}
+                        onChange={(e) => setReply(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") sendReply();
+                        }}
+                        placeholder="Ketik balasan untuk pelanggan..."
+                        className="h-10 flex-1 rounded-xl border border-[#E2E8F0] bg-[#F8FAFC] px-3.5 text-[13px] text-[#1E293B] outline-none transition focus:border-[#38BDF8]"
+                      />
+                      <button
+                        type="button"
+                        onClick={sendReply}
+                        disabled={busyAction || !reply.trim()}
+                        className="flex h-10 items-center gap-1.5 rounded-xl bg-[#1D2B4D] px-4 text-[13px] font-semibold text-white transition hover:bg-[#25395F] disabled:opacity-40"
+                      >
+                        <Send className="size-3.5 text-[#FFD11A]" />
+                        Kirim
+                      </button>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setHandover("ai")}
+                      disabled={busyAction}
+                      className="mt-2.5 flex items-center gap-1 text-[11px] font-medium text-[#94A3B8] transition hover:text-[#1D2B4D] disabled:opacity-40"
+                    >
+                      <RotateCcw className="size-3" />
+                      Kembalikan ke AI
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           ) : (
