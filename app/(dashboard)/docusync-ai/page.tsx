@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Bot, CloudUpload, Paperclip, Send } from "lucide-react";
 import Breadcrumb from "@/components/Breadcrumb";
 import { supabase } from "@/lib/supabase";
-import { uploadDocToN8n } from "./actions";
+import { uploadDocToN8n, chatWithDocuments } from "./actions";
 
 type Message = { id: number; from: "user" | "bot"; text: string; time: string };
 
@@ -26,6 +26,7 @@ const MESSAGES: Message[] = [
 
 const MAX_FILE_MB = 5;
 const ACCEPTED = /^image\/(png|jpe?g)$|^application\/pdf$/;
+const POLL_MS = 4000;
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString("id-ID", {
@@ -41,14 +42,6 @@ function runsToMessages(runs: DocRun[]): Message[] {
     .flatMap((run) => {
       const time = formatTime(run.created_at);
       const runIdNum = Number(run.id.replace(/\D/g, "").slice(0, 8)) || 0;
-      const entries: Message[] = [
-        {
-          id: runIdNum,
-          from: "user",
-          text: run.file_name ? `Unggah dokumen: ${run.file_name}` : "Unggah dokumen",
-          time,
-        },
-      ];
 
       const reply =
         run.status === "done"
@@ -57,40 +50,52 @@ function runsToMessages(runs: DocRun[]): Message[] {
             ? `Gagal memproses dokumen: ${run.error_message || "terjadi kesalahan."}`
             : "Dokumen sedang diproses oleh AI Agent…";
 
-      entries.push({
-        id: runIdNum + 1,
-        from: "bot",
-        text: reply,
-        time,
-      });
-
-      return entries;
+      return [
+        {
+          id: runIdNum,
+          from: "user" as const,
+          text: run.file_name
+            ? `Unggah dokumen: ${run.file_name}`
+            : "Unggah dokumen",
+          time,
+        },
+        { id: runIdNum + 1, from: "bot" as const, text: reply, time },
+      ];
     });
 }
 
 export default function DocuSyncPage() {
-  const [messages, setMessages] = useState<Message[]>(MESSAGES);
+  const [runs, setRuns] = useState<DocRun[]>([]);
+  const [chat, setChat] = useState<Message[]>([]);
   const [command, setCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const [sessionId] = useState(() => crypto.randomUUID());
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
 
-  const HISTORY_LIMIT = 5;
+  const historyMessages = runs.length > 0 ? runsToMessages(runs) : MESSAGES;
+  const displayed = [...historyMessages, ...chat];
+
+  const readyRun =
+    runs.find((r) => r.status === "done") ?? runs[0] ?? null;
 
   async function loadRuns() {
     const { data, error } = await supabase
       .from("doc_processing_runs")
       .select("id, file_name, status, result_summary, error_message, created_at")
       .order("created_at", { ascending: false })
-      .limit(HISTORY_LIMIT);
+      .limit(5);
 
     if (error || !data || data.length === 0) return;
-    setMessages(runsToMessages(data as DocRun[]));
+    setRuns(data as DocRun[]);
   }
 
   useEffect(() => {
     loadRuns();
+    const timer = setInterval(loadRuns, POLL_MS);
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -98,7 +103,7 @@ export default function DocuSyncPage() {
       top: historyRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [messages]);
+  }, [displayed.length]);
 
   async function handleFile(file: File | null) {
     if (!file || busy) return;
@@ -114,14 +119,6 @@ export default function DocuSyncPage() {
     }
 
     setBusy(true);
-    const now = formatTime(new Date().toISOString());
-    const pendingId = Date.now();
-    const botId = pendingId + 1;
-
-    setMessages((prev) => [
-      ...prev,
-      { id: pendingId, from: "user", text: `Unggah dokumen: ${file.name}`, time: now },
-    ]);
 
     try {
       const { data: run, error } = await supabase
@@ -142,53 +139,77 @@ export default function DocuSyncPage() {
       body.append("file_name", file.name);
 
       const result = await uploadDocToN8n(body);
+      if (!result.ok) throw new Error(result.error || "Gagal mengirim dokumen");
 
-      if (!result.ok) {
-        throw new Error(result.error || "Gagal mengirim dokumen");
+      if (result.mock) {
+        setNote("Webhook ekstraksi belum diisi di .env.local — file hanya dicatat di database.");
       }
-
-      const botReply = result.mock
-        ? `Dokumen "${file.name}" sudah dicatat di database. Webhook n8n belum dikonfigurasi di .env.local, jadi proses ekstraksi ditunda.`
-        : `Dokumen "${file.name}" sedang diproses oleh AI Agent…`;
-
-      setMessages((prev) => [
-        ...prev,
-        { id: botId, from: "bot", text: botReply, time: formatTime(new Date().toISOString()) },
-      ]);
 
       await loadRuns();
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { id: botId, from: "bot", text: `Gagal: ${(err as Error).message}`, time: formatTime(new Date().toISOString()) },
-      ]);
+      setNote(`Gagal: ${(err as Error).message}`);
     } finally {
       setBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
-  function sendCommand() {
+  async function sendCommand() {
     const text = command.trim();
     if (!text || busy) return;
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: Date.now(),
-        from: "user",
-        text,
-        time: formatTime(new Date().toISOString()),
-      },
-      {
-        id: Date.now() + 1,
-        from: "bot",
-        text: "Perintah diterima. Unggah dokumen (PDF/PNG/JPG) agar AI Agent dapat memprosesnya.",
-        time: formatTime(new Date().toISOString()),
-      },
-    ]);
+    if (!readyRun) {
+      setNote("Unggah dan proses satu dokumen dulu sebelum bertanya.");
+      return;
+    }
 
+    setBusy(true);
+    setNote("");
+
+    const now = formatTime(new Date().toISOString());
+    const userMsg: Message = { id: Date.now(), from: "user", text, time: now };
+
+    setChat((prev) => [...prev, userMsg]);
     setCommand("");
+
+    try {
+      const history = chat.map((m) => ({
+        role: m.from === "user" ? ("user" as const) : ("assistant" as const),
+        content: m.text,
+      }));
+
+      const result = await chatWithDocuments({
+        sessionId,
+        question: text,
+        runId: readyRun.id,
+        fileName: readyRun.file_name,
+        history,
+      });
+
+      if (!result.ok) throw new Error(result.error);
+
+      setChat((prev) => [
+        ...prev,
+        {
+          id: Date.now() + 1,
+          from: "bot",
+          text: result.reply ?? "Tidak ada respon dari AI.",
+          time: formatTime(new Date().toISOString()),
+        },
+      ]);
+    } catch (err) {
+      setChat((prev) => [
+        ...prev,
+        {
+          id: Date.now() + 1,
+          from: "bot",
+          text: `Gagal: ${(err as Error).message}`,
+          time: formatTime(new Date().toISOString()),
+        },
+      ]);
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -229,7 +250,9 @@ export default function DocuSyncPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-[14px] font-bold text-[#111827]">History Chat</h2>
           <span className="text-[12px] text-[#9CA3AF]">
-            Percakapan dengan AI Agent
+            {readyRun?.file_name
+              ? `Konteks: ${readyRun.file_name}`
+              : "Percakapan dengan AI Agent"}
           </span>
         </div>
 
@@ -237,11 +260,11 @@ export default function DocuSyncPage() {
           ref={historyRef}
           className="mt-3 flex max-h-[340px] flex-col gap-2.5 overflow-y-auto pr-1"
         >
-          {messages.map((m) =>
+          {displayed.map((m) =>
             m.from === "user" ? (
               <div key={m.id} className="flex justify-end">
                 <div className="max-w-[70%] rounded-2xl bg-[#2563EB] px-4 py-2.5 text-white">
-                  <p className="text-[13px] leading-[18px]">{m.text}</p>
+                  <p className="whitespace-pre-wrap text-[13px] leading-[18px]">{m.text}</p>
                   <span className="mt-0.5 block text-[10px] leading-3 text-white/70">
                     {m.time}
                   </span>
@@ -253,13 +276,24 @@ export default function DocuSyncPage() {
                   <Bot className="size-4" strokeWidth={1.75} />
                 </span>
                 <div className="max-w-[70%] rounded-2xl bg-[#F1F5F9] px-4 py-2.5 text-[#111827]">
-                  <p className="text-[13px] leading-[18px]">{m.text}</p>
+                  <p className="whitespace-pre-wrap text-[13px] leading-[18px]">{m.text}</p>
                   <span className="mt-0.5 block text-[10px] leading-3 text-[#94A3B8]">
                     {m.time}
                   </span>
                 </div>
               </div>
             )
+          )}
+
+          {busy && (
+            <div className="flex items-start gap-2.5">
+              <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-[#EFF6FF] text-[#3B82F6]">
+                <Bot className="size-4" strokeWidth={1.75} />
+              </span>
+              <div className="rounded-2xl bg-[#F1F5F9] px-4 py-2.5 text-[12px] text-[#94A3B8]">
+                Mengetik...
+              </div>
+            </div>
           )}
         </div>
       </section>
@@ -281,14 +315,14 @@ export default function DocuSyncPage() {
             onKeyDown={(e) => {
               if (e.key === "Enter") sendCommand();
             }}
-            placeholder="Silakan upload file Anda atau ketik perintah..."
+            placeholder="Tanya isi dokumen atau ketik perintah..."
             className="flex-1 bg-transparent text-[14px] text-[#111827] outline-none placeholder:text-[#94A3B8]"
           />
           <button
             type="button"
             onClick={sendCommand}
             disabled={busy || !command.trim()}
-            aria-label="Kirim perintahh"
+            aria-label="Kirim perintah"
             className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-[#2563EB] text-white transition hover:bg-[#1D4ED8] disabled:opacity-40"
           >
             <Send className="size-5" strokeWidth={1.75} />
