@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { RefreshCw, Mail } from "lucide-react";
-import { runStockAnalysis, submitFinanceRequest } from "./actions";
+import { RefreshCw } from "lucide-react";
+import { runStockAnalysis } from "./actions";
 
 type Material = { label: string; value: number; safeStock: number };
 
@@ -16,7 +16,6 @@ export default function SupplyMindActions({
 }) {
   const router = useRouter();
   const [analyzing, setAnalyzing] = useState(false);
-  const [sending, setSending] = useState(false);
   const [note, setNote] = useState("");
 
   function buildPayload() {
@@ -43,36 +42,15 @@ export default function SupplyMindActions({
         throw new Error(result.error || "Gagal mengirim permintaan analisis");
       }
 
-      // Sinkronkan grafik & AI Insights dengan data terbaru dari Supabase
+      // Perbarui query Server Component agar data grafik & AI Insights ter-refresh
       router.refresh();
-      setNote("Analisis ulang dikirim ke AI Agent.");
+      setNote(result.message ?? "Analisis ulang berhasil dikirim ke AI Agent.");
     } catch (err) {
       setNote(`Gagal: ${(err as Error).message}`);
     } finally {
       setAnalyzing(false);
     }
   }
-
-  async function sendToFinance() {
-    setSending(true);
-    setNote("");
-
-    try {
-      const result = await submitFinanceRequest(buildPayload());
-
-      if (!result.ok) {
-        throw new Error(result.error || "Gagal mengirim pengajuan");
-      }
-
-      setNote("Pengajuan terkirim ke finance.");
-    } catch (err) {
-      setNote(`Gagal: ${(err as Error).message}`);
-    } finally {
-      setSending(false);
-    }
-  }
-
-  const noShortage = criticalMaterials.length === 0;
 
   return (
     <div className="mt-6 flex flex-col items-start gap-3">
@@ -87,17 +65,6 @@ export default function SupplyMindActions({
           strokeWidth={2}
         />
         Analisis Ulang Stok
-      </button>
-
-      <button
-        type="button"
-        onClick={sendToFinance}
-        disabled={noShortage || sending}
-        title={noShortage ? "Semua stok di atas batas aman" : undefined}
-        className="ml-3.5 flex items-center gap-1.5 text-[13px] font-medium text-[#F97316] transition hover:text-[#EA6A0B] disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <Mail className="size-[14px]" strokeWidth={2} />
-        Ajukan ke Finance
       </button>
 
       {note && <p className="text-[12px] text-[#6B7280]">{note}</p>}

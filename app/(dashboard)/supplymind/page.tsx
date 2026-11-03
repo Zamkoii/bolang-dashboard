@@ -1,7 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { Sparkles } from "lucide-react";
 import Breadcrumb from "@/components/Breadcrumb";
-import SupplyMindActions from "@/app/(dashboard)/supplymind/supplymind-actions";
+import SupplyMindActions from "./supplymind-actions";
 
 const PLOT_HEIGHT = 230;
 
@@ -64,22 +64,7 @@ export default async function SupplyMindPage() {
     )
     .order("name");
 
-  // Jika data berhasil diambil, gunakan data Supabase.
-  // Jika tabel kosong atau query gagal, gunakan data simulasi.
   const usingDemoData = !!error || !data || data.length === 0;
-
-  console.log("SupplyMind query result:", {
-    error: error
-      ? {
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code,
-        }
-      : null,
-    data,
-    dataLength: data?.length,
-  });
 
   const MATERIALS = usingDemoData
     ? DEMO_MATERIALS
@@ -99,14 +84,9 @@ export default async function SupplyMindPage() {
     (step * (6 - i)).toLocaleString("id-ID")
   );
 
-  // Analisis stok berdasarkan batas minimum.
+  // Analisis stok berdasarkan batas minimum
   const criticalMaterials = MATERIALS.filter(
     (material) => material.value < material.safeStock
-  );
-
-  const totalStock = MATERIALS.reduce(
-    (total, material) => total + material.value,
-    0
   );
 
   const totalShortage = criticalMaterials.reduce(
@@ -148,7 +128,7 @@ export default async function SupplyMindPage() {
           Kadar Stok Bahan Baku (PPIC)
         </h2>
 
-        {/* Sumbu Y  */}
+        {/* Sumbu Y (tetap diam) */}
         <div className="absolute left-7 top-[97px] flex h-[246px] flex-col justify-between text-[11px] leading-none text-[#9CA3AF]">
           {yTicks.map((tick) => (
             <span key={tick} className="-my-[5px]">
@@ -157,7 +137,7 @@ export default async function SupplyMindPage() {
           ))}
         </div>
 
-        {/* Batang */}
+        {/* Batang Grafik (dapat di-scroll horizontal) */}
         <div className="absolute bottom-0 left-[84px] right-0 top-[97px] overflow-x-auto">
           <div className="flex min-w-full w-max pr-4">
             {MATERIALS.map((bar, index) => {
@@ -202,7 +182,7 @@ export default async function SupplyMindPage() {
         </span>
         <div>
           <h3 className="text-[15px] font-bold text-[#111827]">
-            AI Insights - Rekomendasi MRP  (Material Requirement Planning)
+            AI Insights - Rekomendasi MRP
           </h3>
           <p className="mt-1.5 text-[13.5px] leading-[22px] text-[#4B5563]">
             {insightMessage}
@@ -210,7 +190,7 @@ export default async function SupplyMindPage() {
         </div>
       </section>
 
-      {/* Aksi */}
+      {/* Tombol Aksi */}
       <SupplyMindActions
         criticalMaterials={criticalMaterials}
         totalShortage={totalShortage}
