@@ -5,6 +5,7 @@ import { Bot, CloudUpload, Paperclip, Send } from "lucide-react";
 import Breadcrumb from "@/components/Breadcrumb";
 import { supabase } from "@/lib/supabase";
 import { uploadDocToN8n, chatWithDocuments } from "./actions";
+import { RichText } from "./rich-text";
 
 type Message = {
   id: number;
@@ -24,6 +25,7 @@ const MESSAGES: Message[] = [
 const MAX_FILE_MB = 5;
 const ACCEPTED = /^image\/(png|jpe?g)$|^application\/pdf$/;
 const HISTORY_LIMIT = 5;
+const PROCESSING_TEXT = "Dokumen sedang diproses oleh AI Agent…";
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString("id-ID", {
@@ -77,9 +79,7 @@ function docsToMessages(rows: ScannedDoc[]): Message[] {
       const fileName =
         pickString(row, ["file_name", "filename", "name", "document_name"]) ??
         "Dokumen";
-      const docType = pickString(row, [
-        "doc_type", "document_type", "type", "jenis",
-      ]);
+      const docType = pickString(row, ["doc_type", "document_type", "type", "jenis"]);
       const docNum = pickString(row, [
         "doc_number", "document_number", "doc_num", "number", "no",
       ]);
@@ -97,25 +97,28 @@ function docsToMessages(rows: ScannedDoc[]): Message[] {
         (client ? ` milik ${client}` : "") +
         " berhasil diekstraksi. Ajukan pertanyaan tentang isinya di kolom bawah.";
 
-      return {
-        user: {
-          id: Number(String(row.id ?? "0").replace(/\D/g, "").slice(0, 8)) || Math.random(),
+      const baseId =
+        Number(String(row.id ?? "0").replace(/\D/g, "").slice(0, 8)) ||
+        Math.floor(Math.random() * 100000);
+
+      return [
+        {
+          id: baseId,
           from: "user" as const,
           text: `Unggah dokumen: ${fileName}`,
           time: formatTime(createdAt),
           createdAt: new Date(createdAt).getTime(),
         },
-        bot: {
-          id:
-            (Number(String(row.id ?? "0").replace(/\D/g, "").slice(0, 8)) || 1) + 1,
+        {
+          id: baseId + 1,
           from: "bot" as const,
           text: summary,
           time: formatTime(createdAt),
           createdAt: new Date(createdAt).getTime() + 1000,
         },
-      };
+      ];
     })
-    .flatMap((pair) => [pair.user, pair.bot]);
+    .flat();
 }
 
 export default function DocuSyncPage() {
@@ -188,14 +191,13 @@ export default function DocuSyncPage() {
 
     const nowTime = formatTime(new Date().toISOString());
     const nowMs = Date.now();
-    const userMsgId = nowMs;
     const botMsgId = nowMs + 1;
 
     // Gelembung awal: "sedang diproses" hanya selama webhook berjalan
     setMessages((prev) => [
       ...prev,
       {
-        id: userMsgId,
+        id: nowMs,
         from: "user",
         text: `Unggah dokumen: ${file.name}`,
         time: nowTime,
@@ -204,7 +206,7 @@ export default function DocuSyncPage() {
       {
         id: botMsgId,
         from: "bot",
-        text: "Dokumen sedang diproses oleh AI Agent…",
+        text: PROCESSING_TEXT,
         time: nowTime,
         createdAt: nowMs + 1000,
       },
@@ -279,7 +281,7 @@ export default function DocuSyncPage() {
 
     try {
       const history = messages
-        .filter((m) => m.text !== "Dokumen sedang diproses oleh AI Agent…")
+        .filter((m) => m.text !== PROCESSING_TEXT)
         .slice(-10)
         .map((m) => ({
           role: m.from === "user" ? ("user" as const) : ("assistant" as const),
@@ -372,8 +374,11 @@ export default function DocuSyncPage() {
           {messages.map((m) =>
             m.from === "user" ? (
               <div key={m.id} className="flex justify-end">
-                <div className="max-w-[70%] rounded-2xl bg-[#2563EB] px-4 py-2.5 text-white">
-                  <p className="whitespace-pre-wrap text-[13px] leading-[18px]">{m.text}</p>
+                <div className="max-w-[70%] rounded-2xl bg-[#2563EB] px-4 py-2.5">
+                  <RichText
+                    text={m.text}
+                    className="text-[13px] leading-[18px] text-white [&_code]:bg-white/15"
+                  />
                   <span className="mt-0.5 block text-[10px] leading-3 text-white/70">
                     {m.time}
                   </span>
@@ -384,8 +389,11 @@ export default function DocuSyncPage() {
                 <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-[#EFF6FF] text-[#3B82F6]">
                   <Bot className="size-4" strokeWidth={1.75} />
                 </span>
-                <div className="max-w-[70%] rounded-2xl bg-[#F1F5F9] px-4 py-2.5 text-[#111827]">
-                  <p className="whitespace-pre-wrap text-[13px] leading-[18px]">{m.text}</p>
+                <div className="max-w-[70%] rounded-2xl bg-[#F1F5F9] px-4 py-2.5">
+                  <RichText
+                    text={m.text}
+                    className="text-[13px] leading-[18px] text-[#111827]"
+                  />
                   <span className="mt-0.5 block text-[10px] leading-3 text-[#94A3B8]">
                     {m.time}
                   </span>
