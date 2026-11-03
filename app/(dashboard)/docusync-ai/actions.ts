@@ -9,10 +9,11 @@ export async function uploadDocToN8n(formData: FormData) {
         ok: true,
         mock: true,
         message: "NEXT_PUBLIC_N8N_DOCUSYNC_URL belum diisi di .env.local",
-        data: null,
+        data: null as unknown,
       };
     }
 
+    // Menunggu proses ekstraksi selesai (respond: when last node finishes)
     const n8nRes = await fetch(webhook, { method: "POST", body: formData });
 
     if (!n8nRes.ok) {
@@ -23,7 +24,7 @@ export async function uploadDocToN8n(formData: FormData) {
     }
 
     const data = await n8nRes.json().catch(() => null);
-    return { ok: true, mock: false, data };
+    return { ok: true, mock: false, data: data as unknown };
   } catch (err) {
     return {
       ok: false,
@@ -37,7 +38,6 @@ type ChatTurn = { role: "user" | "assistant"; content: string };
 export async function chatWithDocuments(payload: {
   sessionId: string;
   question: string;
-  runId: string | null;
   fileName: string | null;
   history: ChatTurn[];
 }) {
@@ -60,7 +60,6 @@ export async function chatWithDocuments(payload: {
         chat_input: payload.question,
         message: payload.question,
         text: payload.question,
-        run_id: payload.runId,
         file_name: payload.fileName,
         history: payload.history,
       }),
@@ -71,15 +70,17 @@ export async function chatWithDocuments(payload: {
     }
 
     const data = await res.json().catch(() => ({}));
-    const rawItem = Array.isArray(data) ? data[0] : data;
+    const rawItem = (Array.isArray(data) ? data[0] : data) as
+      | Record<string, unknown>
+      | null
+      | undefined;
 
-    // Menangkap key 'message', 'reply', 'output', dll.
     const reply =
-      rawItem?.message ??
       rawItem?.reply ??
       rawItem?.output ??
       rawItem?.answer ??
       rawItem?.text ??
+      rawItem?.message ??
       rawItem?.response;
 
     const PLACEHOLDER =

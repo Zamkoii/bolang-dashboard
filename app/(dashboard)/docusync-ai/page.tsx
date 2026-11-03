@@ -14,15 +14,6 @@ type Message = {
   createdAt: number;
 };
 
-type DocRun = {
-  id: string;
-  file_name: string | null;
-  status: string | null;
-  result_summary: string | null;
-  error_message: string | null;
-  created_at: string;
-};
-
 const MESSAGES: Message[] = [
   { id: 1, from: "user", text: "Tolong analisa laporan penjualan Q3 ini.", time: "10:42", createdAt: 1 },
   { id: 2, from: "bot", text: "Baik, saya sedang menganalisa dokumen laporan penjualan Q3. Ditemukan kenaikan 18% dibanding Q2.", time: "10:43", createdAt: 2 },
@@ -32,7 +23,7 @@ const MESSAGES: Message[] = [
 
 const MAX_FILE_MB = 5;
 const ACCEPTED = /^image\/(png|jpe?g)$|^application\/pdf$/;
-const POLL_MS = 4000;
+const HISTORY_LIMIT = 5;
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString("id-ID", {
@@ -41,100 +32,136 @@ function formatTime(iso: string) {
   });
 }
 
-function extractStatusMessage(data: unknown): string | null {
-  if (typeof data === "string") return data;
-  if (!data || typeof data !== "object") return null;
-
-  const obj = data as Record<string, unknown>;
-  const candidate = obj.message || obj.replyMessage || obj.reply || obj.output;
-  if (typeof candidate === "string") return candidate;
-
+// ---------- pembaca respons webhook (✅/❌) ----------
+function findStatusMessage(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value.includes("✅") || value.includes("❌") ? value : null;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findStatusMessage(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    if (
+      typeof obj.message === "string" &&
+      (obj.status === "success" || obj.status === "error")
+    ) {
+      return obj.message;
+    }
+    for (const item of Object.values(obj)) {
+      const found = findStatusMessage(item);
+      if (found) return found;
+    }
+  }
   return null;
+}
+
+// ---------- pembacaan defensif tabel scanned_documents ----------
+type ScannedDoc = Record<string, unknown>;
+
+function pickString(row: ScannedDoc, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return null;
+}
+
+function docsToMessages(rows: ScannedDoc[]): Message[] {
+  return rows
+    .map((row) => {
+      const fileName =
+        pickString(row, ["file_name", "filename", "name", "document_name"]) ??
+        "Dokumen";
+      const docType = pickString(row, [
+        "doc_type", "document_type", "type", "jenis",
+      ]);
+      const docNum = pickString(row, [
+        "doc_number", "document_number", "doc_num", "number", "no",
+      ]);
+      const client = pickString(row, [
+        "client_name", "client", "vendor_name", "vendor", "customer_name",
+      ]);
+      const createdAt =
+        pickString(row, ["created_at", "createdAt", "uploaded_at", "timestamp"]) ??
+        new Date().toISOString();
+
+      const label = docType ?? "Dokumen";
+      const summary =
+        `✅ ${label}` +
+        (docNum ? ` (No: ${docNum})` : "") +
+        (client ? ` milik ${client}` : "") +
+        " berhasil diekstraksi. Ajukan pertanyaan tentang isinya di kolom bawah.";
+
+      return {
+        user: {
+          id: Number(String(row.id ?? "0").replace(/\D/g, "").slice(0, 8)) || Math.random(),
+          from: "user" as const,
+          text: `Unggah dokumen: ${fileName}`,
+          time: formatTime(createdAt),
+          createdAt: new Date(createdAt).getTime(),
+        },
+        bot: {
+          id:
+            (Number(String(row.id ?? "0").replace(/\D/g, "").slice(0, 8)) || 1) + 1,
+          from: "bot" as const,
+          text: summary,
+          time: formatTime(createdAt),
+          createdAt: new Date(createdAt).getTime() + 1000,
+        },
+      };
+    })
+    .flatMap((pair) => [pair.user, pair.bot]);
 }
 
 export default function DocuSyncPage() {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [runs, setRuns] = useState<DocRun[]>([]);
   const [command, setCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [sessionId] = useState(() => crypto.randomUUID());
+  const [latestFileName, setLatestFileName] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
 
-  async function loadRuns() {
-    const { data, error } = await supabase
-      .from("doc_processing_runs")
-      .select("id, file_name, status, result_summary, error_message, created_at")
-      .order("created_at", { ascending: false })
-      .limit(5);
-
-    if (error || !data || data.length === 0) return;
-    setRuns(data as DocRun[]);
-  }
-
+  // Riwayat awal: dari scanned_documents (tabel milik n8n)
   useEffect(() => {
-    loadRuns();
-    const timer = setInterval(loadRuns, POLL_MS);
-    return () => clearInterval(timer);
+    (async () => {
+      let rows: ScannedDoc[] | null = null;
+
+      const ordered = await supabase
+        .from("scanned_documents")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(HISTORY_LIMIT);
+
+      if (!ordered.error && ordered.data) {
+        rows = ordered.data as ScannedDoc[];
+      } else {
+        // fallback jika kolom created_at tidak ada
+        const plain = await supabase
+          .from("scanned_documents")
+          .select("*")
+          .limit(HISTORY_LIMIT);
+        if (!plain.error && plain.data) rows = plain.data as ScannedDoc[];
+      }
+
+      if (!rows || rows.length === 0) {
+        setMessages(MESSAGES);
+        return;
+      }
+
+      setMessages(docsToMessages(rows));
+      setLatestFileName(
+        pickString(rows[0], ["file_name", "filename", "name", "document_name"])
+      );
+    })();
   }, []);
-
-  // Gabungkan riwayat unggahan (dari database) + chat tanya-jawab, urut kronologis
-  useEffect(() => {
-    if (runs.length === 0) {
-      setMessages((prev) => (prev.length === 0 ? MESSAGES : prev));
-      return;
-    }
-
-    setMessages((prev) => {
-      const nonRunMessages = prev.filter(
-        (m) =>
-          !m.text.startsWith("Unggah dokumen:") &&
-          !m.text.includes("Dokumen sedang diproses") &&
-          !m.text.includes("✅")
-      );
-
-      const runMessages: Message[] = runs
-        .slice()
-        .reverse()
-        .flatMap((run) => {
-          const time = formatTime(run.created_at);
-          const timeMs = new Date(run.created_at).getTime();
-          const baseId = Number(run.id.replace(/\D/g, "").slice(0, 8)) || 0;
-
-          const botReply =
-            run.status === "done"
-              ? run.result_summary || "✅ Dokumen berhasil diekstraksi."
-              : run.status === "error"
-                ? `Gagal memproses dokumen: ${run.error_message || "terjadi kesalahan."}`
-                : "Dokumen sedang diproses oleh AI Agent…";
-
-          return [
-            {
-              id: baseId,
-              from: "user" as const,
-              text: run.file_name
-                ? `Unggah dokumen: ${run.file_name}`
-                : "Unggah dokumen",
-              time,
-              createdAt: timeMs,
-            },
-            {
-              id: baseId + 1,
-              from: "bot" as const,
-              text: botReply,
-              time,
-              createdAt: timeMs + 1000,
-            },
-          ];
-        });
-
-      return [...runMessages, ...nonRunMessages].sort(
-        (a, b) => a.createdAt - b.createdAt
-      );
-    });
-  }, [runs]);
 
   useEffect(() => {
     historyRef.current?.scrollTo({
@@ -142,8 +169,6 @@ export default function DocuSyncPage() {
       behavior: "smooth",
     });
   }, [messages.length]);
-
-  const readyRun = runs.find((r) => r.status === "done") ?? runs[0] ?? null;
 
   async function handleFile(file: File | null) {
     if (!file || busy) return;
@@ -159,21 +184,25 @@ export default function DocuSyncPage() {
     }
 
     setBusy(true);
-    const nowIso = new Date().toISOString();
-    const nowTime = formatTime(nowIso);
-    const nowMs = Date.now();
+    setNote("");
 
+    const nowTime = formatTime(new Date().toISOString());
+    const nowMs = Date.now();
+    const userMsgId = nowMs;
+    const botMsgId = nowMs + 1;
+
+    // Gelembung awal: "sedang diproses" hanya selama webhook berjalan
     setMessages((prev) => [
       ...prev,
       {
-        id: nowMs,
+        id: userMsgId,
         from: "user",
         text: `Unggah dokumen: ${file.name}`,
         time: nowTime,
         createdAt: nowMs,
       },
       {
-        id: nowMs + 1,
+        id: botMsgId,
         from: "bot",
         text: "Dokumen sedang diproses oleh AI Agent…",
         time: nowTime,
@@ -182,46 +211,45 @@ export default function DocuSyncPage() {
     ]);
 
     try {
-      const { data: run, error: insertError } = await supabase
-        .from("doc_processing_runs")
-        .insert({
-          file_name: file.name,
-          storage_path: null,
-          status: "processing",
-        })
-        .select("id")
-        .single();
-
-      if (insertError) throw new Error(insertError.message);
-
       const body = new FormData();
       body.append("file", file);
-      body.append("run_id", run.id);
       body.append("file_name", file.name);
 
       const result = await uploadDocToN8n(body);
-      if (!result.ok) throw new Error(result.error || "Gagal mengirim dokumen");
 
+      let finalText: string;
       if (result.mock) {
-        setNote("Webhook ekstraksi belum diisi di .env.local — file hanya dicatat di database.");
+        finalText = "Webhook ekstraksi belum diisi di .env.local — file tidak dikirim.";
+      } else if (!result.ok) {
+        finalText = `❌ Gagal memproses dokumen: ${result.error}`;
       } else {
-        const statusMsg =
-          extractStatusMessage(result.data) || "✅ Dokumen Berhasil Diproses!";
-        const isFailed = statusMsg.includes("❌");
-
-        await supabase
-          .from("doc_processing_runs")
-          .update({
-            status: isFailed ? "error" : "done",
-            result_summary: isFailed ? null : statusMsg,
-            error_message: isFailed ? statusMsg : null,
-          })
-          .eq("id", run.id);
+        finalText =
+          findStatusMessage(result.data) ??
+          "✅ Dokumen berhasil diproses oleh AI Agent.";
       }
 
-      await loadRuns();
+      // Ganti gelembung "sedang diproses" dengan hasil akhir
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === botMsgId
+            ? { ...m, text: finalText, time: formatTime(new Date().toISOString()) }
+            : m
+        )
+      );
+
+      setLatestFileName(file.name);
     } catch (err) {
-      setNote(`Gagal: ${(err as Error).message}`);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === botMsgId
+            ? {
+                ...m,
+                text: `❌ Gagal: ${(err as Error).message}`,
+                time: formatTime(new Date().toISOString()),
+              }
+            : m
+        )
+      );
     } finally {
       setBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -232,7 +260,7 @@ export default function DocuSyncPage() {
     const text = command.trim();
     if (!text || busy) return;
 
-    if (!readyRun) {
+    if (!latestFileName) {
       setNote("Unggah dan proses satu dokumen dulu sebelum bertanya.");
       return;
     }
@@ -240,8 +268,7 @@ export default function DocuSyncPage() {
     setBusy(true);
     setNote("");
 
-    const nowIso = new Date().toISOString();
-    const nowTime = formatTime(nowIso);
+    const nowTime = formatTime(new Date().toISOString());
     const nowMs = Date.now();
 
     setMessages((prev) => [
@@ -251,16 +278,18 @@ export default function DocuSyncPage() {
     setCommand("");
 
     try {
-      const history = messages.map((m) => ({
-        role: m.from === "user" ? ("user" as const) : ("assistant" as const),
-        content: m.text,
-      }));
+      const history = messages
+        .filter((m) => m.text !== "Dokumen sedang diproses oleh AI Agent…")
+        .slice(-10)
+        .map((m) => ({
+          role: m.from === "user" ? ("user" as const) : ("assistant" as const),
+          content: m.text,
+        }));
 
       const result = await chatWithDocuments({
         sessionId,
         question: text,
-        runId: readyRun?.id ?? null,
-        fileName: readyRun?.file_name ?? null,
+        fileName: latestFileName,
         history,
       });
 
@@ -271,7 +300,7 @@ export default function DocuSyncPage() {
         {
           id: nowMs + 1,
           from: "bot",
-          text: result.reply,
+          text: result.reply ?? "Tidak ada respon dari AI.",
           time: formatTime(new Date().toISOString()),
           createdAt: Date.now(),
         },
@@ -330,8 +359,8 @@ export default function DocuSyncPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-[14px] font-bold text-[#111827]">History Chat</h2>
           <span className="text-[12px] text-[#9CA3AF]">
-            {readyRun?.file_name
-              ? `Konteks: ${readyRun.file_name}`
+            {latestFileName
+              ? `Konteks: ${latestFileName}`
               : "Percakapan dengan AI Agent"}
           </span>
         </div>
