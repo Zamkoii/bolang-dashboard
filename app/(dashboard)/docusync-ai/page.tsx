@@ -6,7 +6,13 @@ import Breadcrumb from "@/components/Breadcrumb";
 import { supabase } from "@/lib/supabase";
 import { uploadDocToN8n, chatWithDocuments } from "./actions";
 
-type Message = { id: number; from: "user" | "bot"; text: string; time: string };
+type Message = {
+  id: number;
+  from: "user" | "bot";
+  text: string;
+  time: string;
+  createdAt: number;
+};
 
 type DocRun = {
   id: string;
@@ -18,10 +24,10 @@ type DocRun = {
 };
 
 const MESSAGES: Message[] = [
-  { id: 1, from: "user", text: "Tolong analisa laporan penjualan Q3 ini.", time: "10:42 AM" },
-  { id: 2, from: "bot", text: "Baik, saya sedang menganalisa dokumen laporan penjualan Q3. Ditemukan kenaikan 18% dibanding Q2.", time: "10:43 AM" },
-  { id: 3, from: "user", text: "Bisa ekstrak data pelanggan teratas?", time: "10:45 AM" },
-  { id: 4, from: "bot", text: "Tentu. Berikut top 3 pelanggan: PT Maju Jaya, PT Sejahtera, dan PT Nusantara.", time: "10:46 AM" },
+  { id: 1, from: "user", text: "Tolong analisa laporan penjualan Q3 ini.", time: "10:42", createdAt: 1 },
+  { id: 2, from: "bot", text: "Baik, saya sedang menganalisa dokumen laporan penjualan Q3. Ditemukan kenaikan 18% dibanding Q2.", time: "10:43", createdAt: 2 },
+  { id: 3, from: "user", text: "Bisa ekstrak data pelanggan teratas?", time: "10:45", createdAt: 3 },
+  { id: 4, from: "bot", text: "Tentu. Berikut top 3 pelanggan: PT Maju Jaya, PT Sejahtera, dan PT Nusantara.", time: "10:46", createdAt: 4 },
 ];
 
 const MAX_FILE_MB = 5;
@@ -35,38 +41,20 @@ function formatTime(iso: string) {
   });
 }
 
-function runsToMessages(runs: DocRun[]): Message[] {
-  return runs
-    .slice()
-    .reverse()
-    .flatMap((run) => {
-      const time = formatTime(run.created_at);
-      const runIdNum = Number(run.id.replace(/\D/g, "").slice(0, 8)) || 0;
+function extractStatusMessage(data: unknown): string | null {
+  if (typeof data === "string") return data;
+  if (!data || typeof data !== "object") return null;
 
-      const reply =
-        run.status === "done"
-          ? run.result_summary || "Dokumen selesai diekstrak."
-          : run.status === "error"
-            ? `Gagal memproses dokumen: ${run.error_message || "terjadi kesalahan."}`
-            : "Dokumen sedang diproses oleh AI Agent…";
+  const obj = data as Record<string, unknown>;
+  const candidate = obj.message || obj.replyMessage || obj.reply || obj.output;
+  if (typeof candidate === "string") return candidate;
 
-      return [
-        {
-          id: runIdNum,
-          from: "user" as const,
-          text: run.file_name
-            ? `Unggah dokumen: ${run.file_name}`
-            : "Unggah dokumen",
-          time,
-        },
-        { id: runIdNum + 1, from: "bot" as const, text: reply, time },
-      ];
-    });
+  return null;
 }
 
 export default function DocuSyncPage() {
+  const [messages, setMessages] = useState<Message[]>([]);
   const [runs, setRuns] = useState<DocRun[]>([]);
-  const [chat, setChat] = useState<Message[]>([]);
   const [command, setCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
@@ -74,12 +62,6 @@ export default function DocuSyncPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
-
-  const historyMessages = runs.length > 0 ? runsToMessages(runs) : MESSAGES;
-  const displayed = [...historyMessages, ...chat];
-
-  const readyRun =
-    runs.find((r) => r.status === "done") ?? runs[0] ?? null;
 
   async function loadRuns() {
     const { data, error } = await supabase
@@ -98,12 +80,70 @@ export default function DocuSyncPage() {
     return () => clearInterval(timer);
   }, []);
 
+  // Gabungkan riwayat unggahan (dari database) + chat tanya-jawab, urut kronologis
+  useEffect(() => {
+    if (runs.length === 0) {
+      setMessages((prev) => (prev.length === 0 ? MESSAGES : prev));
+      return;
+    }
+
+    setMessages((prev) => {
+      const nonRunMessages = prev.filter(
+        (m) =>
+          !m.text.startsWith("Unggah dokumen:") &&
+          !m.text.includes("Dokumen sedang diproses") &&
+          !m.text.includes("✅")
+      );
+
+      const runMessages: Message[] = runs
+        .slice()
+        .reverse()
+        .flatMap((run) => {
+          const time = formatTime(run.created_at);
+          const timeMs = new Date(run.created_at).getTime();
+          const baseId = Number(run.id.replace(/\D/g, "").slice(0, 8)) || 0;
+
+          const botReply =
+            run.status === "done"
+              ? run.result_summary || "✅ Dokumen berhasil diekstraksi."
+              : run.status === "error"
+                ? `Gagal memproses dokumen: ${run.error_message || "terjadi kesalahan."}`
+                : "Dokumen sedang diproses oleh AI Agent…";
+
+          return [
+            {
+              id: baseId,
+              from: "user" as const,
+              text: run.file_name
+                ? `Unggah dokumen: ${run.file_name}`
+                : "Unggah dokumen",
+              time,
+              createdAt: timeMs,
+            },
+            {
+              id: baseId + 1,
+              from: "bot" as const,
+              text: botReply,
+              time,
+              createdAt: timeMs + 1000,
+            },
+          ];
+        });
+
+      return [...runMessages, ...nonRunMessages].sort(
+        (a, b) => a.createdAt - b.createdAt
+      );
+    });
+  }, [runs]);
+
   useEffect(() => {
     historyRef.current?.scrollTo({
       top: historyRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [displayed.length]);
+  }, [messages.length]);
+
+  const readyRun = runs.find((r) => r.status === "done") ?? runs[0] ?? null;
 
   async function handleFile(file: File | null) {
     if (!file || busy) return;
@@ -119,9 +159,30 @@ export default function DocuSyncPage() {
     }
 
     setBusy(true);
+    const nowIso = new Date().toISOString();
+    const nowTime = formatTime(nowIso);
+    const nowMs = Date.now();
+
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: nowMs,
+        from: "user",
+        text: `Unggah dokumen: ${file.name}`,
+        time: nowTime,
+        createdAt: nowMs,
+      },
+      {
+        id: nowMs + 1,
+        from: "bot",
+        text: "Dokumen sedang diproses oleh AI Agent…",
+        time: nowTime,
+        createdAt: nowMs + 1000,
+      },
+    ]);
 
     try {
-      const { data: run, error } = await supabase
+      const { data: run, error: insertError } = await supabase
         .from("doc_processing_runs")
         .insert({
           file_name: file.name,
@@ -131,7 +192,7 @@ export default function DocuSyncPage() {
         .select("id")
         .single();
 
-      if (error) throw new Error(error.message);
+      if (insertError) throw new Error(insertError.message);
 
       const body = new FormData();
       body.append("file", file);
@@ -143,6 +204,19 @@ export default function DocuSyncPage() {
 
       if (result.mock) {
         setNote("Webhook ekstraksi belum diisi di .env.local — file hanya dicatat di database.");
+      } else {
+        const statusMsg =
+          extractStatusMessage(result.data) || "✅ Dokumen Berhasil Diproses!";
+        const isFailed = statusMsg.includes("❌");
+
+        await supabase
+          .from("doc_processing_runs")
+          .update({
+            status: isFailed ? "error" : "done",
+            result_summary: isFailed ? null : statusMsg,
+            error_message: isFailed ? statusMsg : null,
+          })
+          .eq("id", run.id);
       }
 
       await loadRuns();
@@ -166,14 +240,18 @@ export default function DocuSyncPage() {
     setBusy(true);
     setNote("");
 
-    const now = formatTime(new Date().toISOString());
-    const userMsg: Message = { id: Date.now(), from: "user", text, time: now };
+    const nowIso = new Date().toISOString();
+    const nowTime = formatTime(nowIso);
+    const nowMs = Date.now();
 
-    setChat((prev) => [...prev, userMsg]);
+    setMessages((prev) => [
+      ...prev,
+      { id: nowMs, from: "user", text, time: nowTime, createdAt: nowMs },
+    ]);
     setCommand("");
 
     try {
-      const history = chat.map((m) => ({
+      const history = messages.map((m) => ({
         role: m.from === "user" ? ("user" as const) : ("assistant" as const),
         content: m.text,
       }));
@@ -181,30 +259,32 @@ export default function DocuSyncPage() {
       const result = await chatWithDocuments({
         sessionId,
         question: text,
-        runId: readyRun.id,
-        fileName: readyRun.file_name,
+        runId: readyRun?.id ?? null,
+        fileName: readyRun?.file_name ?? null,
         history,
       });
 
       if (!result.ok) throw new Error(result.error);
 
-      setChat((prev) => [
+      setMessages((prev) => [
         ...prev,
         {
-          id: Date.now() + 1,
+          id: nowMs + 1,
           from: "bot",
-          text: result.reply ?? "Tidak ada respon dari AI.",
+          text: result.reply,
           time: formatTime(new Date().toISOString()),
+          createdAt: Date.now(),
         },
       ]);
     } catch (err) {
-      setChat((prev) => [
+      setMessages((prev) => [
         ...prev,
         {
-          id: Date.now() + 1,
+          id: nowMs + 1,
           from: "bot",
           text: `Gagal: ${(err as Error).message}`,
           time: formatTime(new Date().toISOString()),
+          createdAt: Date.now(),
         },
       ]);
     } finally {
@@ -260,7 +340,7 @@ export default function DocuSyncPage() {
           ref={historyRef}
           className="mt-3 flex max-h-[340px] flex-col gap-2.5 overflow-y-auto pr-1"
         >
-          {displayed.map((m) =>
+          {messages.map((m) =>
             m.from === "user" ? (
               <div key={m.id} className="flex justify-end">
                 <div className="max-w-[70%] rounded-2xl bg-[#2563EB] px-4 py-2.5 text-white">

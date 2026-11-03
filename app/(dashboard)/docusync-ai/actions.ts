@@ -9,6 +9,7 @@ export async function uploadDocToN8n(formData: FormData) {
         ok: true,
         mock: true,
         message: "NEXT_PUBLIC_N8N_DOCUSYNC_URL belum diisi di .env.local",
+        data: null,
       };
     }
 
@@ -21,8 +22,8 @@ export async function uploadDocToN8n(formData: FormData) {
       };
     }
 
-    const data = await n8nRes.json().catch(() => ({}));
-    return { ok: true, data };
+    const data = await n8nRes.json().catch(() => null);
+    return { ok: true, mock: false, data };
   } catch (err) {
     return {
       ok: false,
@@ -56,6 +57,9 @@ export async function chatWithDocuments(payload: {
       body: JSON.stringify({
         session_id: payload.sessionId,
         question: payload.question,
+        chat_input: payload.question,
+        message: payload.question,
+        text: payload.question,
         run_id: payload.runId,
         file_name: payload.fileName,
         history: payload.history,
@@ -67,20 +71,21 @@ export async function chatWithDocuments(payload: {
     }
 
     const data = await res.json().catch(() => ({}));
-
-    // n8n terkadang mengembalikan array: [{ output: "..." }] atau objek: { output: "..." }
     const rawItem = Array.isArray(data) ? data[0] : data;
 
-    // Deteksi berbagai kemungkinan key output dari AI Agent n8n
+    // Menangkap key 'message', 'reply', 'output', dll.
     const reply =
+      rawItem?.message ??
       rawItem?.reply ??
       rawItem?.output ??
       rawItem?.answer ??
       rawItem?.text ??
-      rawItem?.message ??
       rawItem?.response;
 
-    if (!reply) {
+    const PLACEHOLDER =
+      /workflow (was|has been) started|workflow executed|no output|empty/i;
+
+    if (!reply || PLACEHOLDER.test(String(reply))) {
       return {
         ok: false,
         error: `Balasan n8n tidak berisi teks. Respons asli: ${JSON.stringify(
