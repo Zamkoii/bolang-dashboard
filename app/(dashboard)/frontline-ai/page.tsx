@@ -133,7 +133,7 @@ export default function FrontlineAIPage() {
   const selectedChat = chats.find((chat) => chat.id === selectedId) ?? null;
   const sessionId = selectedChat?.sessionId ?? null;
 
-  // ---- Daftar sesi dari tabel customer_chats ----
+  // Mengambil daftar sesi dari customer_chats
   const loadChats = useCallback(async () => {
     const { data, error } = await supabase
       .from("customer_chats")
@@ -159,9 +159,9 @@ export default function FrontlineAIPage() {
     loadChats();
   }, [loadChats]);
 
-  // ---- Isi riwayat pesan per sesi ----
+  // Mengambil isi pesan per sesi serta status penanganan (AI vs Human)
   const loadThread = useCallback(async () => {
-    if (!sessionId) return;
+    if (!sessionId || !selectedChat) return;
 
     const [msgs, handover] = await Promise.all([
       supabase
@@ -176,29 +176,44 @@ export default function FrontlineAIPage() {
         .maybeSingle(),
     ]);
 
+    let loadedMessages: ChatMessage[] = [];
+
     if (!msgs.error && msgs.data && msgs.data.length > 0) {
-      setThread(
-        (msgs.data as ChatMessageRow[]).map((m) => ({
-          id: m.id,
-          sender:
-            m.sender === "customer"
-              ? "customer"
-              : m.sender === "agent"
-                ? "agent"
-                : "ai",
-          text: m.message,
-          time: new Date(m.created_at).toLocaleTimeString("id-ID", {
-            hour: "2-digit",
-            minute: "2-digit",
-          }),
-        }))
-      );
-    } else {
-      setThread(DEMO_THREADS[sessionId] ?? []);
+      loadedMessages = (msgs.data as ChatMessageRow[]).map((m) => ({
+        id: m.id,
+        sender:
+          m.sender === "customer"
+            ? "customer"
+            : m.sender === "agent"
+              ? "agent"
+              : "ai",
+        text: m.message,
+        time: new Date(m.created_at).toLocaleTimeString("id-ID", {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      }));
     }
 
+    // Sinkronisasi pertanyaan awal:
+    // Jika di chat_messages belum ada pertanyaan dari pelanggan, sisipkan pertanyaan dari customer_chats di baris pertama
+    const hasCustomerQuestion = loadedMessages.some(
+      (m) => m.sender === "customer"
+    );
+
+    if (!hasCustomerQuestion && selectedChat.message && selectedChat.message.trim()) {
+      const initialQuestionMsg: ChatMessage = {
+        id: 0,
+        sender: "customer",
+        text: selectedChat.message,
+        time: selectedChat.time,
+      };
+      loadedMessages = [initialQuestionMsg, ...loadedMessages];
+    }
+
+    setThread(loadedMessages.length > 0 ? loadedMessages : (DEMO_THREADS[sessionId] ?? []));
     setHandledBy(handover.data?.handled_by === "human" ? "human" : "ai");
-  }, [sessionId]);
+  }, [sessionId, selectedChat]);
 
   useEffect(() => {
     setAnalysis(null);
@@ -210,7 +225,7 @@ export default function FrontlineAIPage() {
     return () => clearInterval(timer);
   }, [sessionId, loadThread]);
 
-  // Realtime subscription untuk percakapan admin
+  // Realtime subscription untuk chat admin
   useEffect(() => {
     const channel = supabase
       .channel("frontline-realtime-admin")
@@ -249,7 +264,7 @@ export default function FrontlineAIPage() {
     setAnalysis(null);
   }
 
-  // Admin mengambil alih atau mengembalikan ke AI
+  // Admin mengambil alih percakapan atau mengembalikannya ke AI
   async function setHandover(next: "ai" | "human") {
     if (!sessionId || busyAction) return;
     setBusyAction(true);
@@ -278,7 +293,7 @@ export default function FrontlineAIPage() {
     setBusyAction(false);
   }
 
-  // Admin mengirim balasan
+  // Admin mengirim balasan CS
   async function sendReply() {
     const cleanReply = reply.trim();
     if (!cleanReply || !sessionId || handledBy !== "human") return;
@@ -444,7 +459,7 @@ export default function FrontlineAIPage() {
         </button>
       </div>
 
-      {/* Konten utama */}
+      {/* Konten utama: Kolom Kiri Antrean, Kolom Kanan Detail Percakapan */}
       <div className="mt-8 grid grid-cols-1 items-start gap-6 lg:grid-cols-[400px_1fr]">
         <div>
           <div className="mb-4 flex items-center justify-between">
@@ -670,4 +685,4 @@ export default function FrontlineAIPage() {
       </div>
     </div>
   );
-} 
+}   
