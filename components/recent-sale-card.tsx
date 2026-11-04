@@ -1,15 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ReceiptText } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
-type Sale = {
-  productName: string;
-  total: number;
-  time: string;
-  customer: string;
-};
+type Sale = { productName: string; total: number; time: string; customer: string };
 
 const FALLBACK: Sale = {
   productName: "Baterai ABC AA 1.5V",
@@ -30,33 +25,44 @@ const getInitials = (name: string) =>
 export function RecentSaleCard() {
   const [sale, setSale] = useState<Sale>(FALLBACK);
 
-  useEffect(() => {
-    let alive = true;
+  const loadLatest = useCallback(async () => {
+    const { data, error } = await supabase.rpc("get_latest_sale");
+    if (error || !data || data.length === 0) return;
 
-    (async () => {
-      const { data, error } = await supabase.rpc("get_latest_sale");
-
-      if (error || !data || data.length === 0 || !alive) return;
-
-      const latest = data[0];
-      const orderDate = new Date(latest.created_at);
-      const timeStr = orderDate.toLocaleTimeString("id-ID", {
+    const latest = data[0];
+    setSale({
+      productName: latest.product_name,
+      total: latest.total,
+      time: new Date(latest.created_at).toLocaleTimeString("id-ID", {
         hour: "2-digit",
         minute: "2-digit",
-      });
+      }),
+      customer: latest.customer_name,
+    });
+  }, []);
 
-      setSale({
-        productName: latest.product_name,
-        total: latest.total,
-        time: timeStr,
-        customer: latest.customer_name,
-      });
-    })();
+  useEffect(() => {
+    loadLatest();
+
+    // Realtime: pesanan/item baru → ambil ulang order terakhir
+    const channel = supabase
+      .channel("recent-sale-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "orders" },
+        loadLatest
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "order_items" },
+        loadLatest
+      )
+      .subscribe();
 
     return () => {
-      alive = false;
+      supabase.removeChannel(channel);
     };
-  }, []);
+  }, [loadLatest]);
 
   return (
     <div className="rounded-xl border border-white/10 bg-[#16233D] p-3">

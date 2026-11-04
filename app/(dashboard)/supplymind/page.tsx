@@ -3,6 +3,8 @@ import { Sparkles } from "lucide-react";
 import Breadcrumb from "@/components/Breadcrumb";
 import SupplyMindActions from "./supplymind-actions";
 
+export const dynamic = "force-dynamic";
+
 const PLOT_HEIGHT = 230;
 
 // Data simulasi bahan baku sebagai cadangan.

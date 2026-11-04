@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, CloudUpload, Paperclip, Send } from "lucide-react";
 import Breadcrumb from "@/components/Breadcrumb";
 import { supabase } from "@/lib/supabase";
@@ -75,6 +75,8 @@ function pickString(row: ScannedDoc, keys: string[]): string | null {
 
 function docsToMessages(rows: ScannedDoc[]): Message[] {
   return rows
+    .slice()
+    .reverse() // terlama di atas → terbaru di bawah
     .map((row) => {
       const fileName =
         pickString(row, ["file_name", "filename", "name", "document_name"]) ??
@@ -122,7 +124,8 @@ function docsToMessages(rows: ScannedDoc[]): Message[] {
 }
 
 export default function DocuSyncPage() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [historyMessages, setHistoryMessages] = useState<Message[]>(MESSAGES);
+  const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [command, setCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
@@ -131,47 +134,79 @@ export default function DocuSyncPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
+  // Nama file yang sudah ditampilkan live pada sesi ini (agar tidak dobel dengan riwayat DB)
+  const liveFilesRef = useRef<Set<string>>(new Set());
 
-  // Riwayat awal: dari scanned_documents (tabel milik n8n)
-  useEffect(() => {
-    (async () => {
-      let rows: ScannedDoc[] | null = null;
+  const loadHistory = useCallback(async () => {
+    let rows: ScannedDoc[] | null = null;
 
-      const ordered = await supabase
+    const ordered = await supabase
+      .from("scanned_documents")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(HISTORY_LIMIT);
+
+    if (!ordered.error && ordered.data) {
+      rows = ordered.data as ScannedDoc[];
+    } else {
+      const plain = await supabase
         .from("scanned_documents")
         .select("*")
-        .order("created_at", { ascending: false })
         .limit(HISTORY_LIMIT);
+      if (!plain.error && plain.data) rows = plain.data as ScannedDoc[];
+    }
 
-      if (!ordered.error && ordered.data) {
-        rows = ordered.data as ScannedDoc[];
-      } else {
-        // fallback jika kolom created_at tidak ada
-        const plain = await supabase
-          .from("scanned_documents")
-          .select("*")
-          .limit(HISTORY_LIMIT);
-        if (!plain.error && plain.data) rows = plain.data as ScannedDoc[];
-      }
+    if (!rows || rows.length === 0) {
+      setHistoryMessages(MESSAGES);
+      return;
+    }
 
-      if (!rows || rows.length === 0) {
-        setMessages(MESSAGES);
-        return;
-      }
+    // Lewati baris yang sudah tampil live pada sesi ini
+    const visible = rows.filter((row) => {
+      const fname = pickString(row, ["file_name", "filename", "name", "document_name"]);
+      return !(fname && liveFilesRef.current.has(fname));
+    });
 
-      setMessages(docsToMessages(rows));
-      setLatestFileName(
-        pickString(rows[0], ["file_name", "filename", "name", "document_name"])
-      );
-    })();
+    setHistoryMessages(visible.length > 0 ? docsToMessages(visible) : MESSAGES);
+    setLatestFileName(
+      pickString(rows[0], ["file_name", "filename", "name", "document_name"])
+    );
   }, []);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
+  // Realtime: dokumen baru hasil ekstraksi n8n langsung muncul tanpa refresh
+  useEffect(() => {
+    const channel = supabase
+      .channel("docusync-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "scanned_documents" },
+        () => loadHistory()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadHistory]);
+
+  const displayed = useMemo(
+    () =>
+      [...historyMessages, ...chatMessages].sort(
+        (a, b) => a.createdAt - b.createdAt
+      ),
+    [historyMessages, chatMessages]
+  );
 
   useEffect(() => {
     historyRef.current?.scrollTo({
       top: historyRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [messages.length]);
+  }, [displayed.length]);
 
   async function handleFile(file: File | null) {
     if (!file || busy) return;
@@ -193,8 +228,7 @@ export default function DocuSyncPage() {
     const nowMs = Date.now();
     const botMsgId = nowMs + 1;
 
-    // Gelembung awal: "sedang diproses" hanya selama webhook berjalan
-    setMessages((prev) => [
+    setChatMessages((prev) => [
       ...prev,
       {
         id: nowMs,
@@ -230,8 +264,7 @@ export default function DocuSyncPage() {
           "✅ Dokumen berhasil diproses oleh AI Agent.";
       }
 
-      // Ganti gelembung "sedang diproses" dengan hasil akhir
-      setMessages((prev) =>
+      setChatMessages((prev) =>
         prev.map((m) =>
           m.id === botMsgId
             ? { ...m, text: finalText, time: formatTime(new Date().toISOString()) }
@@ -239,9 +272,10 @@ export default function DocuSyncPage() {
         )
       );
 
+      liveFilesRef.current.add(file.name);
       setLatestFileName(file.name);
     } catch (err) {
-      setMessages((prev) =>
+      setChatMessages((prev) =>
         prev.map((m) =>
           m.id === botMsgId
             ? {
@@ -273,14 +307,14 @@ export default function DocuSyncPage() {
     const nowTime = formatTime(new Date().toISOString());
     const nowMs = Date.now();
 
-    setMessages((prev) => [
+    setChatMessages((prev) => [
       ...prev,
       { id: nowMs, from: "user", text, time: nowTime, createdAt: nowMs },
     ]);
     setCommand("");
 
     try {
-      const history = messages
+      const history = [...historyMessages, ...chatMessages]
         .filter((m) => m.text !== PROCESSING_TEXT)
         .slice(-10)
         .map((m) => ({
@@ -297,7 +331,7 @@ export default function DocuSyncPage() {
 
       if (!result.ok) throw new Error(result.error);
 
-      setMessages((prev) => [
+      setChatMessages((prev) => [
         ...prev,
         {
           id: nowMs + 1,
@@ -308,7 +342,7 @@ export default function DocuSyncPage() {
         },
       ]);
     } catch (err) {
-      setMessages((prev) => [
+      setChatMessages((prev) => [
         ...prev,
         {
           id: nowMs + 1,
@@ -371,7 +405,7 @@ export default function DocuSyncPage() {
           ref={historyRef}
           className="mt-3 flex max-h-[340px] flex-col gap-2.5 overflow-y-auto pr-1"
         >
-          {messages.map((m) =>
+          {displayed.map((m) =>
             m.from === "user" ? (
               <div key={m.id} className="flex justify-end">
                 <div className="max-w-[70%] rounded-2xl bg-[#2563EB] px-4 py-2.5">

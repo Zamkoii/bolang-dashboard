@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 import { runStockAnalysis } from "./actions";
 
 type Material = { label: string; value: number; safeStock: number };
@@ -17,6 +18,25 @@ export default function SupplyMindActions({
   const router = useRouter();
   const [analyzing, setAnalyzing] = useState(false);
   const [note, setNote] = useState("");
+
+  // Realtime: saat raw_materials berubah (insert/update/delete),
+  // refresh Server Component → grafik & AI Insights terhitung ulang tanpa reload
+  useEffect(() => {
+    const channel = supabase
+      .channel("supplymind-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "raw_materials" },
+        () => {
+          router.refresh();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [router]);
 
   function buildPayload() {
     return {
@@ -42,7 +62,6 @@ export default function SupplyMindActions({
         throw new Error(result.error || "Gagal mengirim permintaan analisis");
       }
 
-      // Perbarui query Server Component agar data grafik & AI Insights ter-refresh
       router.refresh();
       setNote(result.message ?? "Analisis ulang berhasil dikirim ke AI Agent.");
     } catch (err) {
@@ -70,4 +89,4 @@ export default function SupplyMindActions({
       {note && <p className="text-[12px] text-[#6B7280]">{note}</p>}
     </div>
   );
-}
+} 

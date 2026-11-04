@@ -91,20 +91,10 @@ const INITIAL_CHATS: Chat[] = [
 
 const DEMO_THREADS: Record<string, ChatMessage[]> = {
   "demo-1": [
-    {
-      id: 1,
-      sender: "customer",
-      text: "Apakah stok produk A warna pink masih ada?",
-      time: "10:22",
-    },
+    { id: 1, sender: "customer", text: "Apakah stok produk A warna pink masih ada?", time: "10:22" },
   ],
   "demo-2": [
-    {
-      id: 1,
-      sender: "customer",
-      text: "Kira-kira estimasi sampai barangnya ke Bogor berapa hari ya?",
-      time: "10:08",
-    },
+    { id: 1, sender: "customer", text: "Kira-kira estimasi sampai barangnya ke Bogor berapa hari ya?", time: "10:08" },
   ],
 };
 
@@ -144,36 +134,32 @@ export default function FrontlineAIPage() {
   const sessionId = selectedChat?.sessionId ?? null;
 
   // ---- daftar sesi dari customer_chats ----
-  useEffect(() => {
-    let mounted = true;
+  const loadChats = useCallback(async () => {
+    const { data, error } = await supabase
+      .from("customer_chats")
+      .select("id, session_id, customer_name, category, question, created_at")
+      .order("created_at", { ascending: false });
 
-    (async () => {
-      const { data, error } = await supabase
-        .from("customer_chats")
-        .select("id, session_id, customer_name, category, question, created_at")
-        .order("created_at", { ascending: false });
+    if (error || !data || data.length === 0) return;
 
-      if (!mounted || error || !data || data.length === 0) return;
-
-      setChats(
-        data.map((row: CustomerChatRow, index: number) => ({
-          id: row.id,
-          sessionId: row.session_id,
-          name: row.customer_name || `Pelanggan #${row.id}`,
-          category: row.category || "Umum",
-          message: row.question || "",
-          time: formatRelativeTime(row.created_at),
-          tone: index % 2 === 0 ? ("indigo" as const) : ("fuchsia" as const),
-        }))
-      );
-    })();
-
-    return () => {
-      mounted = false;
-    };
+    setChats(
+      data.map((row: CustomerChatRow, index: number) => ({
+        id: row.id,
+        sessionId: row.session_id,
+        name: row.customer_name || `Pelanggan #${row.id}`,
+        category: row.category || "Umum",
+        message: row.question || "",
+        time: formatRelativeTime(row.created_at),
+        tone: index % 2 === 0 ? ("indigo" as const) : ("fuchsia" as const),
+      }))
+    );
   }, []);
 
-  // ---- isi percakapan + status pengelolaan, polling ----
+  useEffect(() => {
+    loadChats();
+  }, [loadChats]);
+
+  // ---- isi percakapan + status pengelolaan ----
   const loadThread = useCallback(async () => {
     if (!sessionId) return;
 
@@ -224,6 +210,32 @@ export default function FrontlineAIPage() {
     return () => clearInterval(timer);
   }, [sessionId, loadThread]);
 
+  // ---- Realtime: pesan baru, perubahan status sesi, dan sesi baru muncul instan ----
+  useEffect(() => {
+    const channel = supabase
+      .channel("frontline-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "chat_messages" },
+        () => loadThread()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "chat_handover" },
+        () => loadThread()
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "customer_chats" },
+        () => loadChats()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadThread, loadChats]);
+
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
   }, [thread]);
@@ -237,7 +249,6 @@ export default function FrontlineAIPage() {
     setAnalysis(null);
   }
 
-  // ---- ambil alih / kembalikan ke AI ----
   async function setHandover(next: "ai" | "human") {
     if (!sessionId || busyAction) return;
     setBusyAction(true);
@@ -266,7 +277,6 @@ export default function FrontlineAIPage() {
     setBusyAction(false);
   }
 
-  // ---- kirim balasan CS ----
   async function sendReply() {
     const cleanReply = reply.trim();
     if (!cleanReply || !sessionId || handledBy !== "human") return;
