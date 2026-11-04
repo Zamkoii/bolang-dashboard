@@ -133,7 +133,7 @@ export default function FrontlineAIPage() {
   const selectedChat = chats.find((chat) => chat.id === selectedId) ?? null;
   const sessionId = selectedChat?.sessionId ?? null;
 
-  // ---- daftar sesi dari customer_chats ----
+  // ---- Daftar sesi dari tabel customer_chats ----
   const loadChats = useCallback(async () => {
     const { data, error } = await supabase
       .from("customer_chats")
@@ -159,7 +159,7 @@ export default function FrontlineAIPage() {
     loadChats();
   }, [loadChats]);
 
-  // ---- isi percakapan + status pengelolaan ----
+  // ---- Isi riwayat pesan per sesi ----
   const loadThread = useCallback(async () => {
     if (!sessionId) return;
 
@@ -210,10 +210,10 @@ export default function FrontlineAIPage() {
     return () => clearInterval(timer);
   }, [sessionId, loadThread]);
 
-  // ---- Realtime: pesan baru, perubahan status sesi, dan sesi baru muncul instan ----
+  // Realtime subscription untuk percakapan admin
   useEffect(() => {
     const channel = supabase
-      .channel("frontline-realtime")
+      .channel("frontline-realtime-admin")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "chat_messages" },
@@ -249,6 +249,7 @@ export default function FrontlineAIPage() {
     setAnalysis(null);
   }
 
+  // Admin mengambil alih atau mengembalikan ke AI
   async function setHandover(next: "ai" | "human") {
     if (!sessionId || busyAction) return;
     setBusyAction(true);
@@ -277,6 +278,7 @@ export default function FrontlineAIPage() {
     setBusyAction(false);
   }
 
+  // Admin mengirim balasan
   async function sendReply() {
     const cleanReply = reply.trim();
     if (!cleanReply || !sessionId || handledBy !== "human") return;
@@ -668,4 +670,4 @@ export default function FrontlineAIPage() {
       </div>
     </div>
   );
-}
+} 

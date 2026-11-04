@@ -69,7 +69,7 @@ export function RecentSaleCard() {
       <div className="flex items-center justify-between">
         <span className="flex items-center gap-1.5 text-[9px] font-bold tracking-[0.08em] text-[#8FA3BF]">
           <span className="size-1.5 rounded-full bg-[#34D399]" />
-          TERJUAL BARU
+          BARU TERJUAL
         </span>
         <span className="text-[9px] text-[#64748B]">{sale.time}</span>
       </div>
