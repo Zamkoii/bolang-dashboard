@@ -11,8 +11,12 @@ const baloo = Baloo_2({
 
 export const metadata: Metadata = {
   title: "Bolang Dashboard",
-  description: "Frontline AI, SupplyMind, dan DocuSync AI",
-};
+  description: "Enterprise Productivity AI Agent Dashboard",
+  icons: {
+    icon: "/icon.png",
+    shortcut: "/icon.png",
+    apple: "/icon.png",
+}};
 
 export default function RootLayout({
   children,
