@@ -105,6 +105,9 @@ const AVATAR_TONE = {
 
 const POLL_MS = 3000;
 
+const stripPrefix = (value: string | null): string =>
+  (value ?? "").replace(/^=\s*/, "");
+
 function formatRelativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const minutes = Math.floor(diff / 60000);
@@ -146,9 +149,9 @@ export default function FrontlineAIPage() {
       data.map((row: CustomerChatRow, index: number) => ({
         id: row.id,
         sessionId: row.session_id,
-        name: row.customer_name || `Pelanggan #${row.id}`,
-        category: row.category || "Umum",
-        message: row.question || "",
+        name: stripPrefix(row.customer_name) || `Pelanggan #${row.id}`,
+        category: stripPrefix(row.category) || "Umum",
+        message: stripPrefix(row.question),
         time: formatRelativeTime(row.created_at),
         tone: index % 2 === 0 ? ("indigo" as const) : ("fuchsia" as const),
       }))
