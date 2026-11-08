@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, CloudUpload, Paperclip, Send } from "lucide-react";
 import Breadcrumb from "@/components/Breadcrumb";
 import { supabase } from "@/lib/supabase";
@@ -15,16 +15,8 @@ type Message = {
   createdAt: number;
 };
 
-const MESSAGES: Message[] = [
-  { id: 1, from: "user", text: "Tolong analisa laporan penjualan Q3 ini.", time: "10:42", createdAt: 1 },
-  { id: 2, from: "bot", text: "Baik, saya sedang menganalisa dokumen laporan penjualan Q3. Ditemukan kenaikan 18% dibanding Q2.", time: "10:43", createdAt: 2 },
-  { id: 3, from: "user", text: "Bisa ekstrak data pelanggan teratas?", time: "10:45", createdAt: 3 },
-  { id: 4, from: "bot", text: "Tentu. Berikut top 3 pelanggan: PT Maju Jaya, PT Sejahtera, dan PT Nusantara.", time: "10:46", createdAt: 4 },
-];
-
 const MAX_FILE_MB = 5;
 const ACCEPTED = /^image\/(png|jpe?g)$|^application\/pdf$/;
-const HISTORY_LIMIT = 5;
 const PROCESSING_TEXT = "Dokumen sedang diproses oleh AI Agent…";
 
 function formatTime(iso: string) {
@@ -34,7 +26,6 @@ function formatTime(iso: string) {
   });
 }
 
-// ---------- pembaca respons webhook (✅/❌) ----------
 function findStatusMessage(value: unknown): string | null {
   if (typeof value === "string") {
     return value.includes("✅") || value.includes("❌") ? value : null;
@@ -62,7 +53,6 @@ function findStatusMessage(value: unknown): string | null {
   return null;
 }
 
-// ---------- pembacaan defensif tabel scanned_documents ----------
 type ScannedDoc = Record<string, unknown>;
 
 function pickString(row: ScannedDoc, keys: string[]): string | null {
@@ -73,59 +63,8 @@ function pickString(row: ScannedDoc, keys: string[]): string | null {
   return null;
 }
 
-function docsToMessages(rows: ScannedDoc[]): Message[] {
-  return rows
-    .slice()
-    .reverse() // terlama di atas → terbaru di bawah
-    .map((row) => {
-      const fileName =
-        pickString(row, ["file_name", "filename", "name", "document_name"]) ??
-        "Dokumen";
-      const docType = pickString(row, ["doc_type", "document_type", "type", "jenis"]);
-      const docNum = pickString(row, [
-        "doc_number", "document_number", "doc_num", "number", "no",
-      ]);
-      const client = pickString(row, [
-        "client_name", "client", "vendor_name", "vendor", "customer_name",
-      ]);
-      const createdAt =
-        pickString(row, ["created_at", "createdAt", "uploaded_at", "timestamp"]) ??
-        new Date().toISOString();
-
-      const label = docType ?? "Dokumen";
-      const summary =
-        `✅ ${label}` +
-        (docNum ? ` (No: ${docNum})` : "") +
-        (client ? ` milik ${client}` : "") +
-        " berhasil diekstraksi. Ajukan pertanyaan tentang isinya di kolom bawah.";
-
-      const baseId =
-        Number(String(row.id ?? "0").replace(/\D/g, "").slice(0, 8)) ||
-        Math.floor(Math.random() * 100000);
-
-      return [
-        {
-          id: baseId,
-          from: "user" as const,
-          text: `Unggah dokumen: ${fileName}`,
-          time: formatTime(createdAt),
-          createdAt: new Date(createdAt).getTime(),
-        },
-        {
-          id: baseId + 1,
-          from: "bot" as const,
-          text: summary,
-          time: formatTime(createdAt),
-          createdAt: new Date(createdAt).getTime() + 1000,
-        },
-      ];
-    })
-    .flat();
-}
-
 export default function DocuSyncPage() {
-  const [historyMessages, setHistoryMessages] = useState<Message[]>(MESSAGES);
-  const [chatMessages, setChatMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [command, setCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
@@ -134,79 +73,65 @@ export default function DocuSyncPage() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const historyRef = useRef<HTMLDivElement>(null);
-  // Nama file yang sudah ditampilkan live pada sesi ini (agar tidak dobel dengan riwayat DB)
-  const liveFilesRef = useRef<Set<string>>(new Set());
 
-  const loadHistory = useCallback(async () => {
-    let rows: ScannedDoc[] | null = null;
+  // Pesan sambutan — sesi chat selalu fresh saat halaman dibuka
+  useEffect(() => {
+    setMessages([
+      {
+        id: 1,
+        from: "bot",
+        text:
+          "👋 Halo! Saya **DocuSync AI** PT Bolang Energy Indonesia.\n\n" +
+          "Unggah dokumen (PO, Invoice, Kuotansi) untuk diekstraksi otomatis, " +
+          "atau langsung ajukan pertanyaan apa saja di kolom bawah.",
+        time: formatTime(new Date().toISOString()),
+        createdAt: 0,
+      },
+    ]);
+  }, []);
 
-    const ordered = await supabase
+  // Konteks dokumen: ambil NAMA file terakhir saja (bukan riwayat gelembung)
+  const loadContext = useCallback(async () => {
+    const { data, error } = await supabase
       .from("scanned_documents")
       .select("*")
       .order("created_at", { ascending: false })
-      .limit(HISTORY_LIMIT);
+      .limit(1);
 
-    if (!ordered.error && ordered.data) {
-      rows = ordered.data as ScannedDoc[];
-    } else {
-      const plain = await supabase
-        .from("scanned_documents")
-        .select("*")
-        .limit(HISTORY_LIMIT);
-      if (!plain.error && plain.data) rows = plain.data as ScannedDoc[];
-    }
-
-    if (!rows || rows.length === 0) {
-      setHistoryMessages(MESSAGES);
-      return;
-    }
-
-    // Lewati baris yang sudah tampil live pada sesi ini
-    const visible = rows.filter((row) => {
-      const fname = pickString(row, ["file_name", "filename", "name", "document_name"]);
-      return !(fname && liveFilesRef.current.has(fname));
-    });
-
-    setHistoryMessages(visible.length > 0 ? docsToMessages(visible) : MESSAGES);
+    if (error || !data || data.length === 0) return;
     setLatestFileName(
-      pickString(rows[0], ["file_name", "filename", "name", "document_name"])
+      pickString(data[0] as ScannedDoc, [
+        "file_name", "filename", "name", "document_name",
+      ])
     );
   }, []);
 
   useEffect(() => {
-    loadHistory();
-  }, [loadHistory]);
+    loadContext();
+  }, [loadContext]);
 
-  // Realtime: dokumen baru hasil ekstraksi n8n langsung muncul tanpa refresh
+  // Realtime: konteks ikut terbarui saat dokumen baru diproses dari mana pun
   useEffect(() => {
     const channel = supabase
-      .channel("docusync-realtime")
+      .channel("docusync-context")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "scanned_documents" },
-        () => loadHistory()
+        { event: "INSERT", schema: "public", table: "scanned_documents" },
+        () => loadContext()
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadHistory]);
-
-  const displayed = useMemo(
-    () =>
-      [...historyMessages, ...chatMessages].sort(
-        (a, b) => a.createdAt - b.createdAt
-      ),
-    [historyMessages, chatMessages]
-  );
+  }, [loadContext]);
 
   useEffect(() => {
     historyRef.current?.scrollTo({
       top: historyRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [displayed.length]);
+  }, [messages.length]);
 
   async function handleFile(file: File | null) {
     if (!file || busy) return;
@@ -228,7 +153,7 @@ export default function DocuSyncPage() {
     const nowMs = Date.now();
     const botMsgId = nowMs + 1;
 
-    setChatMessages((prev) => [
+    setMessages((prev) => [
       ...prev,
       {
         id: nowMs,
@@ -264,7 +189,7 @@ export default function DocuSyncPage() {
           "✅ Dokumen berhasil diproses oleh AI Agent.";
       }
 
-      setChatMessages((prev) =>
+      setMessages((prev) =>
         prev.map((m) =>
           m.id === botMsgId
             ? { ...m, text: finalText, time: formatTime(new Date().toISOString()) }
@@ -272,10 +197,9 @@ export default function DocuSyncPage() {
         )
       );
 
-      liveFilesRef.current.add(file.name);
       setLatestFileName(file.name);
     } catch (err) {
-      setChatMessages((prev) =>
+      setMessages((prev) =>
         prev.map((m) =>
           m.id === botMsgId
             ? {
@@ -296,25 +220,20 @@ export default function DocuSyncPage() {
     const text = command.trim();
     if (!text || busy) return;
 
-    if (!latestFileName) {
-      setNote("Unggah dan proses satu dokumen dulu sebelum bertanya.");
-      return;
-    }
-
     setBusy(true);
     setNote("");
 
     const nowTime = formatTime(new Date().toISOString());
     const nowMs = Date.now();
 
-    setChatMessages((prev) => [
+    setMessages((prev) => [
       ...prev,
       { id: nowMs, from: "user", text, time: nowTime, createdAt: nowMs },
     ]);
     setCommand("");
 
     try {
-      const history = [...historyMessages, ...chatMessages]
+      const history = messages
         .filter((m) => m.text !== PROCESSING_TEXT)
         .slice(-10)
         .map((m) => ({
@@ -325,13 +244,13 @@ export default function DocuSyncPage() {
       const result = await chatWithDocuments({
         sessionId,
         question: text,
-        fileName: latestFileName,
+        fileName: latestFileName ?? null,
         history,
       });
 
       if (!result.ok) throw new Error(result.error);
 
-      setChatMessages((prev) => [
+      setMessages((prev) => [
         ...prev,
         {
           id: nowMs + 1,
@@ -342,7 +261,7 @@ export default function DocuSyncPage() {
         },
       ]);
     } catch (err) {
-      setChatMessages((prev) => [
+      setMessages((prev) => [
         ...prev,
         {
           id: nowMs + 1,
@@ -405,7 +324,7 @@ export default function DocuSyncPage() {
           ref={historyRef}
           className="mt-3 flex max-h-[340px] flex-col gap-2.5 overflow-y-auto pr-1"
         >
-          {displayed.map((m) =>
+          {messages.map((m) =>
             m.from === "user" ? (
               <div key={m.id} className="flex justify-end">
                 <div className="max-w-[70%] rounded-2xl bg-[#2563EB] px-4 py-2.5">
