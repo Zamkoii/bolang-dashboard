@@ -4,6 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { GitBranch, Headphones, Package, type LucideIcon } from "lucide-react";
 import { RecentSaleCard } from "@/components/recent-sale-card";
+import { useRouter } from "next/navigation";   // ← tambahkan (selain usePathname yang sudah ada)
+import { LogOut } from "lucide-react";          // ← tambahkan ke import lucide yang sudah ada
+import { supabase } from "@/lib/supabase/client"; // ← tambahkan
 
 type NavItem = { label: string; href: string; icon: LucideIcon };
 
@@ -15,6 +18,7 @@ const NAV_ITEMS: NavItem[] = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
 
   return (
     <aside className="flex h-full w-[260px] shrink-0 flex-col bg-[#1E2A52]">
@@ -70,6 +74,7 @@ export default function Sidebar() {
         })}
       </nav>
 
+
       <div className="mt-8 px-3">
         <RecentSaleCard />
       </div>
@@ -83,6 +88,19 @@ export default function Sidebar() {
         <span className="absolute left-[140px] top-[60px] size-[340px] rounded-full bg-[#2563EB]/60" />
         <span className="absolute -left-[70px] top-[200px] size-[300px] rounded-full bg-[radial-gradient(circle_at_50%_85%,#4B7FE0_0%,#3366D6_45%,#2F63D3_100%)] opacity-90" />
       </div>
+
+      <button
+          type="button"
+          onClick={async () => {
+            await supabase.auth.signOut();
+            router.push("/login");
+            router.refresh();
+          }}
+          className="mt-auto flex w-full items-center gap-3 rounded-xl px-3 py-3 text-slate-300 transition hover:bg-red-500/10 hover:text-red-400"
+        >
+          <LogOut className="size-5 shrink-0" />
+          <span className="text-sm font-semibold">Keluar</span>
+        </button>
     </aside>
   );
 }
